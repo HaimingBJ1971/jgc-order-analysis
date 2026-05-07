@@ -1,0 +1,28 @@
+# 业务数据文件
+*.xlsx
+*.csv
+*.pdf
+*.md
+!CLAUDE.md
+!PRD.md
+!*.plan.md
+
+# 输出目录
+output/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+
+# IDE config
+.trae/
+.cursor/
+
+# 打包文件
+*.zip
+
+# macOS
+.DS_Store
+.venv/
