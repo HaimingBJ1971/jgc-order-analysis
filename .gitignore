@@ -5,6 +5,7 @@
 *.md
 !CLAUDE.md
 !PRD.md
+!README.md
 !*.plan.md
 
 # 输出目录

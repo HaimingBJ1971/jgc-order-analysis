@@ -1350,16 +1350,27 @@ def main():
         if '店面' in csv_unrecognized.columns:
             csv_unrecognized = csv_unrecognized[csv_unrecognized['店面'] == store_name].copy()
 
-    # Step 3.5: 尝试通过桌台号+金额匹配无订单号的桌访记录
+    # Step 3.5: 有订单号但 POS 中不存在的记录，也纳入三选二模糊匹配
+    if len(csv_valid) > 0:
+        pos_order_ids = set(orders_with_group['订单号'].astype(str))
+        valid_has_pos = csv_valid['订单号'].astype(str).isin(pos_order_ids)
+        valid_no_pos = csv_valid[~valid_has_pos].copy()
+        if len(valid_no_pos) > 0:
+            csv_unrecognized = pd.concat([csv_unrecognized, valid_no_pos], ignore_index=True)
+            csv_valid = csv_valid[valid_has_pos].copy()
+            print(f'  订单号未匹配: {len(valid_no_pos)} 条（有订单号但POS中不存在，转入三选二匹配）')
+
+    # Step 3.6: 通过桌台号+金额+时间三选二匹配无订单号的桌访记录
+    amount_matched_count = 0
     if len(csv_unrecognized) > 0:
         amount_matched, csv_unrecognized = match_unrecognized_by_table_amount(
             csv_unrecognized, orders_with_group
         )
         if amount_matched:
-            # 将匹配成功的记录加入 csv_valid（带 _amount_matched 标记）
             matched_df = pd.DataFrame([rec for _, rec in amount_matched])
             csv_valid = pd.concat([csv_valid, matched_df], ignore_index=True)
-            print(f'  金额+桌台匹配: {len(amount_matched)} 条（桌访订单号缺失，通过金额与桌台号匹配）')
+            amount_matched_count = len(amount_matched)
+    print(f'  三选二匹配: {amount_matched_count} 条（通过桌台号+金额+时间模糊匹配）')
 
     # Step 4: 关联桌访
     print(f'\n[3/5] 关联桌访数据...')
