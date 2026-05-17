@@ -26,8 +26,6 @@ POS 系统同一桌客人多次扫码产生多笔独立订单，合并后才能�
 │   │   └── pdf_generator_complete.py    #     PDF 全量订单列表
 │   └── jin-gu-cang-order-analysis/     #   可独立部署的纯订单分析工具
 │       └── scripts/run_analysis.py      #     CLI 入口（纯订单，无桌访）
-└── 桌访技能工作目录/                     #   独立桌访报告工具
-    └── zhuofang_processor.py            #     完全独立，不依赖 order_merger_skill
 ```
 
 ## 快速开始
@@ -58,13 +56,6 @@ python3 scripts/run_analysis.py \
     --excel "../../订单桌访合并/店内订单明细2026-04-29+...xlsx"
 ```
 
-### 桌访数据独立报告
-
-```bash
-cd 桌访技能工作目录
-python3 zhuofang_processor.py 桌探数据_1.5版_50条_2026-4-29.csv --dir output
-```
-
 ## 核心算法
 
 ### 订单合并（order_merger.py）
@@ -72,7 +63,7 @@ python3 zhuofang_processor.py 桌探数据_1.5版_50条_2026-4-29.csv --dir outp
 仅在相同桌台内合并，按优先级第一个命中即决策：
 
 - **R0 并发拆单**：下单间隔 < 5 分钟 → 直接合并
-- **R1 时间窗口**：距首单超时（普通 1h / 包间 3h）→ 新开会话
+- **R1 时间窗口**：距首单超时（普通 2h / 包间 3h）→ 新开会话（小单例外）
 - **R2 加单金额上限**：候选收入 > 锚点 × 50% → 新开会话
 - **R3 结账后间隔**：距结账超时（普通 30min / 包间 120min）→ 新开会话
 - **R3.5 包间晚餐纯酒水加单**：包间 + 17:00-23:00 + 全酒水 → 直接合并

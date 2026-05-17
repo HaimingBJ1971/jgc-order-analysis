@@ -3,7 +3,7 @@
 """
 
 # ── 时间窗口（从会话首单下单时间算起，超过则不合并） ──
-T_WINDOW_HOURS_REGULAR = 1    # 普通桌台：1小时
+T_WINDOW_HOURS_REGULAR = 2    # 普通桌台：2小时
 T_WINDOW_HOURS_PRIVATE = 3    # 包间：3小时
 
 # ── 并发拆单识别（同桌多人各自扫码同时下单） ──

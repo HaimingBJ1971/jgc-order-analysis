@@ -12,7 +12,7 @@ POS 系统同一桌客人多次扫码产生多笔独立订单，合并后才能�
 
 ```
 订单与桌访合并/
-├── PRD.md                            # 完整 PRD（v3.8），所有规则和参数的定义权威
+├── PRD.md                            # 完整 PRD（v3.10），所有规则与参数定义
 ├── 订单桌访合并/                      # ★ 主工具：订单+桌访合并分析
 │   ├── merge_order_zhuofang.py       #   CLI 入口，完整 pipeline（唯一入口文件）
 │   ├── requirements.txt              #   pandas, openpyxl, reportlab
@@ -31,9 +31,6 @@ POS 系统同一桌客人多次扫码产生多笔独立订单，合并后才能�
 │   │   └── pdf_generator_complete.py #   PDF「全量订单列表」
 │   └── jin-gu-cang-order-analysis/   # 可独立部署的纯订单分析 Skill 外壳
 │       └── scripts/run_analysis.py   #   CLI 入口（纯订单，无桌访）
-└── 桌访技能工作目录/                  # 独立桌访报告工具
-    └── .trae/skills/zhuofang-report-generator/
-        └── zhuofang_processor.py     #   完全独立，不依赖 order_merger_skill
 ```
 
 ## 常用命令
@@ -60,16 +57,6 @@ python3 scripts/run_analysis.py \
 
 输出：`订单列表_YYYYMMDD.pdf` + `客单价重点订单分析_YYYYMMDD.pdf`
 
-### 桌访数据独立报告
-
-```bash
-cd 桌访技能工作目录
-python3 .trae/skills/zhuofang-report-generator/zhuofang_processor.py \
-    桌探数据_1.5版_50条_2026-4-29.csv --dir output
-```
-
-输出：`output/桌访报告_YYYYMMDD.xlsx` + `.pdf` + `桌访分析原始记录_YYYYMMDD.md`
-
 ### 安装依赖
 
 ```bash
@@ -87,11 +74,8 @@ merge_order_zhuofang.py
   │     ├── order_merger.py → config.py
   │     ├── aggregator.py
   │     └── item_report_helpers.py
-  └── 与 zhuofang_processor.py 相互独立，无依赖
 
 run_analysis.py → 依赖 order_merger_skill（同上）
-
-zhuofang_processor.py → 完全独立，不依赖 order_merger_skill
 ```
 
 **关键约束**：`merge_order_zhuofang.py` 通过相对路径 `../每日订单分析/order_merger_skill` 导入，不通过 pip install。目录结构必须保持不变。
@@ -111,7 +95,7 @@ zhuofang_processor.py → 完全独立，不依赖 order_merger_skill
 仅在相同桌台内合并。规则按优先级，第一个命中即决策：
 
 - **R0 并发拆单**：下单间隔 < 5分钟 → 直接合并
-- **R1 时间窗口**：距首单超时（普通1h/包间3h）→ 新开会话（包间小单例外）
+- **R1 时间窗口**：距首单超时（普通2h/包间3h）→ 新开会话（小单例外）
 - **R2 加单金额上限**：候选收入 > 锚点 × 50% → 新开会话
 - **R3 结账后间隔**：距结账超时（普通30min/包间120min）→ 新开会话（小单例外）
 - **R3.5 包间晚餐纯酒水加单**：包间 + 17:00-23:00 + 全酒水 → 直接合并
@@ -142,5 +126,5 @@ zhuofang_processor.py → 完全独立，不依赖 order_merger_skill
 - 所有可调参数在 `order_merger_skill/config.py`，不要在业务逻辑中硬编码阈值
 - 修改合并算法前先读 `每日订单分析/订单合并逻辑优化_*.plan.md` 了解历史设计决策
 - PRD.md 是规范文档，算法变更后需同步更新 PRD
-- 三个输出工具共享核心算法库但彼此独立，改 `order_merger_skill` 会影响前两个工具但不影响 `zhuofang_processor.py`
+- 改 `order_merger_skill` 会影响两个工具（主工具和纯订单分析工具）
 - 商品名称含全角/半角括号差异，匹配时需统一规范化处理

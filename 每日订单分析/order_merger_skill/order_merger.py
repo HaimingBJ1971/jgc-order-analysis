@@ -232,7 +232,7 @@ def merge_orders(orders_df, item_sets, line_cnts, items_df=None):
             time_from_start = (
                 row["下单时间"] - group_start
             ) > pd.Timedelta(hours=t_window_hours)
-            if time_from_start and not (is_private_room and is_small):
+            if time_from_start and not is_small:
                 _start_new_group(
                     groups, table, group_id, group_order_ids,
                     group_start, group_end, anchor,
