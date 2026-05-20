@@ -89,6 +89,11 @@ TARGET_NEW_ITEMS = [
     "青花椒提拉米苏/美式咖啡",
 ]
 
+BAOLI_TARGET_DISHES = [
+    "川南鱼香肉丝（不能免葱）",
+    "香菜回锅茄子",
+]
+
 
 def compute_dish_stats(items_df):
     """统计重点菜品销售份数，按数量降序返回 [(菜名, 份数), ...]"""
@@ -140,6 +145,69 @@ def compute_new_item_stats(items_df):
         stats.append((target, qty))
 
     return sorted(stats, key=lambda x: x[1], reverse=True)
+
+
+def _make_dish_table(data_rows):
+    """创建菜品统计表，复用统一样式。"""
+    tbl = Table(data_rows, colWidths=[7*cm, 3*cm])
+    tbl.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2c3e50')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+        ('ALIGN', (0, 1), (0, -1), 'LEFT'),
+        ('ALIGN', (1, 1), (1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, -1), CHINESE_FONT),
+        ('FONTSIZE', (0, 0), (-1, 0), 10),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.whitesmoke),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.whitesmoke, colors.white]),
+    ]))
+    return tbl
+
+
+def _compute_baoli_dish_stats(items_df):
+    """保利店专用：仅统计两个指定菜品。"""
+    stats = []
+    items_df = items_df.copy()
+    items_df["商品名称_规范化"] = items_df["商品名称"].astype(str).apply(
+        lambda x: x.replace('（', '(').replace('）', ')')
+    )
+    for target in BAOLI_TARGET_DISHES:
+        normalized = target.replace('（', '(').replace('）', ')')
+        matched = items_df[items_df["商品名称_规范化"].str.contains(normalized, na=False, case=False, regex=False)]
+        if len(matched) == 0:
+            keyword = re.sub(r'[（(].*?[）)]', '', target).strip()
+            if keyword:
+                matched = items_df[items_df["商品名称"].str.contains(keyword, na=False, case=False, regex=False)]
+        qty = int(matched["数量"].sum()) if len(matched) > 0 else 0
+        stats.append((target, qty))
+    return sorted(stats, key=lambda x: x[1], reverse=True)
+
+
+def compute_lunch_dinner_top5(items_df, gs):
+    """保利店：按午市/晚市分别统计销量前5的菜品。
+    返回 (lunch_top5, dinner_top5)，各为 [(菜名, 份数), ...]
+    """
+    # 构建 订单号 → 午市/晚市 映射
+    order_meal = {}
+    for _, row in gs.iterrows():
+        meal = row.get('_meal', '')
+        for oid in row.get('包含订单', []):
+            order_meal[str(oid)] = meal
+
+    items = items_df.copy()
+    items['_meal'] = items['订单号'].astype(str).map(order_meal)
+
+    def _top5(subset):
+        dish_qty = subset.groupby('商品名称')['数量'].sum()
+        dish_qty = dish_qty[dish_qty > 0]
+        top = dish_qty.nlargest(6).astype(int)
+        return list(zip(top.index, top.values))
+
+    lunch = _top5(items[items['_meal'] == '午市'])
+    dinner = _top5(items[items['_meal'] == '晚市'])
+    return lunch, dinner
 
 # ── 数据加载 ──────────────────────────────────────────────────────
 
@@ -795,49 +863,46 @@ def generate_pdf_report(gs, group_items, stats, items_df, store_name, target_dat
     ]))
     story.append(waiter_table)
 
+    is_baoli = '保利' in str(store_name)
+
     # 六、重点菜品销售统计
     story.append(Spacer(1, 0.5 * cm))
     story.append(Paragraph('六、重点菜品销售统计', subtitle_style))
     story.append(Spacer(1, 0.3 * cm))
-    dish_stats = compute_dish_stats(items_df)
+    if is_baoli:
+        dish_stats = _compute_baoli_dish_stats(items_df)
+    else:
+        dish_stats = compute_dish_stats(items_df)
     dish_data = [['菜品名称', '销售份数']] + [[name, str(qty)] for name, qty in dish_stats]
-    dish_table = Table(dish_data, colWidths=[7*cm, 3*cm])
-    dish_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2c3e50')),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-        ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
-        ('ALIGN', (0, 1), (0, -1), 'LEFT'),
-        ('ALIGN', (1, 1), (1, -1), 'CENTER'),
-        ('FONTNAME', (0, 0), (-1, -1), CHINESE_FONT),
-        ('FONTSIZE', (0, 0), (-1, 0), 10),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
-        ('BACKGROUND', (0, 1), (-1, -1), colors.whitesmoke),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.whitesmoke, colors.white]),
-    ]))
-    story.append(dish_table)
+    story.append(_make_dish_table(dish_data))
 
-    # 七、重点新品销售统计
+    # 七、重点新品销售统计 / 保利店午晚热销统计
     story.append(Spacer(1, 0.5 * cm))
-    story.append(Paragraph('七、重点新品销售统计', subtitle_style))
-    story.append(Spacer(1, 0.3 * cm))
-    new_stats = compute_new_item_stats(items_df)
-    new_data = [['商品名称', '销售份数']] + [[name, str(qty)] for name, qty in new_stats]
-    new_table = Table(new_data, colWidths=[7*cm, 3*cm])
-    new_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2c3e50')),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-        ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
-        ('ALIGN', (0, 1), (0, -1), 'LEFT'),
-        ('ALIGN', (1, 1), (1, -1), 'CENTER'),
-        ('FONTNAME', (0, 0), (-1, -1), CHINESE_FONT),
-        ('FONTSIZE', (0, 0), (-1, 0), 10),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
-        ('BACKGROUND', (0, 1), (-1, -1), colors.whitesmoke),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.whitesmoke, colors.white]),
-    ]))
-    story.append(new_table)
+    if is_baoli:
+        story.append(Paragraph('七、午晚热销统计', subtitle_style))
+        story.append(Spacer(1, 0.3 * cm))
+        lunch_top, dinner_top = compute_lunch_dinner_top5(items_df, gs)
+
+        story.append(Paragraph('<b>午市（&lt;16:00）Top 6</b>', normal_style))
+        story.append(Spacer(1, 0.15 * cm))
+        lunch_data = [['菜品名称', '销售份数']] + [[name, str(qty)] for name, qty in lunch_top]
+        if len(lunch_data) == 1:
+            lunch_data.append(['-', '0'])
+        story.append(_make_dish_table(lunch_data))
+        story.append(Spacer(1, 0.3 * cm))
+
+        story.append(Paragraph('<b>晚市（≥16:00）Top 6</b>', normal_style))
+        story.append(Spacer(1, 0.15 * cm))
+        dinner_data = [['菜品名称', '销售份数']] + [[name, str(qty)] for name, qty in dinner_top]
+        if len(dinner_data) == 1:
+            dinner_data.append(['-', '0'])
+        story.append(_make_dish_table(dinner_data))
+    else:
+        story.append(Paragraph('七、重点新品销售统计', subtitle_style))
+        story.append(Spacer(1, 0.3 * cm))
+        new_stats = compute_new_item_stats(items_df)
+        new_data = [['商品名称', '销售份数']] + [[name, str(qty)] for name, qty in new_stats]
+        story.append(_make_dish_table(new_data))
 
     # 八、疑似异常汇总
     story.append(Spacer(1, 0.5 * cm))
@@ -1254,19 +1319,40 @@ def generate_markdown_report(gs, store_name, target_date, output_path, unrecogni
         lines.append(f'| {name} | {cnt} |')
     lines.append(f'| **合计** | **{waiter_counts.sum()}** |')
 
+    is_baoli_md = '保利' in str(store_name)
+
     # 六、重点菜品销售统计
     lines += ['', '## 六、重点菜品销售统计', '']
     lines.append('| 菜品名称 | 销售份数 |')
     lines.append('|----------|----------|')
-    for name, qty in compute_dish_stats(items_df):
+    md_dish_stats = _compute_baoli_dish_stats(items_df) if is_baoli_md else compute_dish_stats(items_df)
+    for name, qty in md_dish_stats:
         lines.append(f'| {name} | {qty} |')
 
-    # 七、重点新品销售统计
-    lines += ['', '## 七、重点新品销售统计', '']
-    lines.append('| 商品名称 | 销售份数 |')
-    lines.append('|----------|----------|')
-    for name, qty in compute_new_item_stats(items_df):
-        lines.append(f'| {name} | {qty} |')
+    # 七、重点新品销售统计 / 保利店午晚热销统计
+    if is_baoli_md:
+        lines += ['', '## 七、午晚热销统计', '']
+        lunch_top, dinner_top = compute_lunch_dinner_top5(items_df, gs)
+        lines += ['', '### 午市（<16:00）Top 6', '']
+        lines.append('| 菜品名称 | 销售份数 |')
+        lines.append('|----------|----------|')
+        for name, qty in lunch_top:
+            lines.append(f'| {name} | {qty} |')
+        if not lunch_top:
+            lines.append('| - | 0 |')
+        lines += ['', '### 晚市（≥16:00）Top 6', '']
+        lines.append('| 菜品名称 | 销售份数 |')
+        lines.append('|----------|----------|')
+        for name, qty in dinner_top:
+            lines.append(f'| {name} | {qty} |')
+        if not dinner_top:
+            lines.append('| - | 0 |')
+    else:
+        lines += ['', '## 七、重点新品销售统计', '']
+        lines.append('| 商品名称 | 销售份数 |')
+        lines.append('|----------|----------|')
+        for name, qty in compute_new_item_stats(items_df):
+            lines.append(f'| {name} | {qty} |')
 
     if len(unrecognized) > 0:
         lines += ['', '## 八、未匹配桌访记录', '',
