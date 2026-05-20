@@ -26,6 +26,13 @@ POS 系统同一桌客人多次扫码产生多笔独立订单，合并后才能�
 │   │   └── pdf_generator_complete.py    #     PDF 全量订单列表
 │   └── jin-gu-cang-order-analysis/     #   可独立部署的纯订单分析工具
 │       └── scripts/run_analysis.py      #     CLI 入口（纯订单，无桌访）
+├── 长期订单分析/                          #   跨日期长期趋势分析
+│   ├── main.py                          #     CLI 入口，完整 pipeline
+│   ├── db_manager.py                    #     SQLite 持久化，增量检测
+│   ├── multi_file_loader.py             #     多文件加载与去重
+│   ├── daily_stats.py                   #     每日统计计算
+│   ├── excel_writer.py                  #     4-Sheet Excel 输出
+│   └── requirements.txt                 #     pandas, openpyxl
 ```
 
 ## 快速开始
@@ -55,6 +62,18 @@ cd 每日订单分析/jin-gu-cang-order-analysis
 python3 scripts/run_analysis.py \
     --excel "../../订单桌访合并/店内订单明细2026-04-29+...xlsx"
 ```
+
+### 长期订单分析（跨日期趋势）
+
+```bash
+cd 长期订单分析
+python3 main.py \
+    --files "路径/文件1.xlsx" "路径/文件2.xlsx" \
+    --db "output/长期订单分析.db" \
+    --output-dir ./output
+```
+
+输出：`长期订单分析_YYYYMMDD_YYYYMMDD.xlsx` + SQLite 数据库（支持增量更新）
 
 ## 核心算法
 

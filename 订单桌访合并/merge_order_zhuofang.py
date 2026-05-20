@@ -406,7 +406,7 @@ def associate_feedback(group_sum, orders_with_group, feedback_map):
     return gs
 
 
-def detect_anomalies(gs, items_clean):
+def detect_anomalies(gs, items_clean, store_name=''):
     """
     检测消费团体中的疑似异常情况。
 
@@ -414,13 +414,12 @@ def detect_anomalies(gs, items_clean):
     1a. 人数>=5 且 商品数<=3
     1b. 人数>=3 且 商品数<=2
     1c. 人数>=2 且 商品数==1
-    2a. 人均<10（>=2人）
-    2b. 人均<20（>=3人）
-    2c. 人均<30（>=4人）
+    2a-c. 人均过低（万荷店: <10/20/30; 保利店: <15>=2人）
     3.  同桌台前后消费疑似同一拨人
 
     返回 gs 副本，新增 '异常标记' 列（字符串，无异常为空）。
     """
+    is_baoli = '保利' in str(store_name)
     gs = gs.copy()
     gs['异常标记'] = ''
 
@@ -444,18 +443,22 @@ def detect_anomalies(gs, items_clean):
         elif people >= 2 and dishes == 1:
             gs.at[idx, '异常标记'] = f'人数{people}仅1件商品，请关注'
 
-    # 规则 2：人均异常低（分三个子级，排除已被标记的）
+    # 规则 2：人均异常低（排除已被标记的）
     for idx, row in gs.iterrows():
         if gs.at[idx, '异常标记']:
             continue
         people = int(row['团体人数'])
         arpu = row['人均消费']
-        if people >= 2 and arpu < 10:
-            gs.at[idx, '异常标记'] = f'人均仅¥{arpu:.0f}（{people}人），疑似人数多录或免单'
-        elif people >= 3 and arpu < 20:
-            gs.at[idx, '异常标记'] = f'人均仅¥{arpu:.0f}（{people}人）'
-        elif people >= 4 and arpu < 30:
-            gs.at[idx, '异常标记'] = f'人均仅¥{arpu:.0f}（{people}人），偏低'
+        if is_baoli:
+            if people >= 2 and arpu < 15:
+                gs.at[idx, '异常标记'] = f'人均仅¥{arpu:.0f}（{people}人），偏低'
+        else:
+            if people >= 2 and arpu < 10:
+                gs.at[idx, '异常标记'] = f'人均仅¥{arpu:.0f}（{people}人），疑似人数多录或免单'
+            elif people >= 3 and arpu < 20:
+                gs.at[idx, '异常标记'] = f'人均仅¥{arpu:.0f}（{people}人）'
+            elif people >= 4 and arpu < 30:
+                gs.at[idx, '异常标记'] = f'人均仅¥{arpu:.0f}（{people}人），偏低'
 
     # 规则 3：同桌台前后消费疑似同一拨人
     sorted_gs = gs.sort_values(['桌台', '开始'])
@@ -974,7 +977,8 @@ def generate_pdf_report(gs, group_items, stats, items_df, store_name, target_dat
     for i, row in display_df.iterrows():
         oid_tail = str(row['首单订单号'])[-8:]
         arpu_s = f"¥{row['人均消费']:.0f}"
-        arpu_cell = _p_html(f'<font color="red">{arpu_s}</font>', cell_c) if row['人均消费'] < 100 else _p(arpu_s, cell_c)
+        arpu_alert = 40 if '保利' in str(store_name) else 100
+        arpu_cell = _p_html(f'<font color="red">{arpu_s}</font>', cell_c) if row['人均消费'] < arpu_alert else _p(arpu_s, cell_c)
         status_s = row['桌访状态']
         status_cell = _p_html(f'<font color="red">{status_s}</font>', cell_c) if status_s == '未桌访' else _p(status_s, cell_c)
 
@@ -1389,7 +1393,7 @@ def main():
 
     # Step 4.6: 异常检测
     print(f'\n[3.5/5] 异常检测...')
-    gs = detect_anomalies(gs, items_clean)
+    gs = detect_anomalies(gs, items_clean, store_name)
     anomaly_count = len(gs[gs['异常标记'] != ''])
     print(f'  疑似异常: {anomaly_count} 个团体')
     for _, r in gs[gs['异常标记'] != ''].iterrows():

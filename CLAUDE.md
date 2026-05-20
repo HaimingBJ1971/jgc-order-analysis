@@ -31,6 +31,13 @@ POS 系统同一桌客人多次扫码产生多笔独立订单，合并后才能�
 │   │   └── pdf_generator_complete.py #   PDF「全量订单列表」
 │   └── jin-gu-cang-order-analysis/   # 可独立部署的纯订单分析 Skill 外壳
 │       └── scripts/run_analysis.py   #   CLI 入口（纯订单，无桌访）
+├── 长期订单分析/                      # ★ 新增：跨日期长期订单趋势分析
+│   ├── main.py                       #   CLI 入口，完整 pipeline
+│   ├── db_manager.py                 #   SQLite 读写、增量检测
+│   ├── multi_file_loader.py          #   多文件加载与去重
+│   ├── daily_stats.py                #   每日统计计算（4个Sheet）
+│   ├── excel_writer.py               #   4-Sheet Excel 输出
+│   └── requirements.txt              #   pandas, openpyxl
 ```
 
 ## 常用命令
@@ -57,6 +64,19 @@ python3 scripts/run_analysis.py \
 
 输出：`订单列表_YYYYMMDD.pdf` + `客单价重点订单分析_YYYYMMDD.pdf`
 
+### 长期订单分析（跨日期趋势）
+
+```bash
+cd 长期订单分析
+python3 main.py \
+    --files "路径/文件1.xlsx" "路径/文件2.xlsx" \
+    --db "output/长期订单分析.db" \
+    --output-dir ./output
+```
+
+输出：`长期订单分析_YYYYMMDD_YYYYMMDD.xlsx` + SQLite 数据库（持久化增量更新）
+Excel 含 4 个 Sheet：数据总览、订单数量明细、客单价区间分布、开单人统计
+
 ### 安装依赖
 
 ```bash
@@ -76,6 +96,13 @@ merge_order_zhuofang.py
   │     └── item_report_helpers.py
 
 run_analysis.py → 依赖 order_merger_skill（同上）
+
+main.py (长期订单分析)
+  ├── 通过 sys.path 引入 ../每日订单分析/order_merger_skill
+  ├── db_manager.py → SQLite 持久化与增量检测
+  ├── multi_file_loader.py → 多文件加载去重
+  ├── daily_stats.py → 每日统计计算
+  └── excel_writer.py → 4-Sheet Excel 输出
 ```
 
 **关键约束**：`merge_order_zhuofang.py` 通过相对路径 `../每日订单分析/order_merger_skill` 导入，不通过 pip install。目录结构必须保持不变。
