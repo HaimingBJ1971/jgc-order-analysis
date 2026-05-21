@@ -257,26 +257,47 @@ def generate_comparison_pdf(output_path, period_info, comparison_info, comp_data
     buckets_tong = comp_data['buckets_tongbi']
 
     bucket_order = ['≥300', '200~300', '150~200', '100~150', '<100']
-    bkt_header = ['客单价区间', '本期占比', '环比占比', '变化', '同比占比', '变化']
+    bkt_header = ['客单价区间', '本期单数', '本期占比', '环比单数变化', '环比变化率', '同比单数变化', '同比变化率']
     bkt_data = [bkt_header]
     for bk in bucket_order:
+        cur_cnt = buckets_cur.get(bk, {}).get('订单数', 0)
         cur_pct = buckets_cur.get(bk, {}).get('占比', 0)
-        ring_pct = buckets_ring.get(bk, {}).get('占比') if buckets_ring else None
-        tong_pct = buckets_tong.get(bk, {}).get('占比') if buckets_tong else None
-        ring_change = f"{cur_pct - ring_pct:+.1f}%" if ring_pct is not None else '-'
-        tong_change = f"{cur_pct - tong_pct:+.1f}%" if tong_pct is not None else '-'
-        ring_color = RED if ring_change.startswith('-') else (GREEN if ring_change.startswith('+') else 'black')
-        tong_color = RED if tong_change.startswith('-') else (GREEN if tong_change.startswith('+') else 'black')
+        ring_cnt = buckets_ring.get(bk, {}).get('订单数') if buckets_ring else None
+        tong_cnt = buckets_tong.get(bk, {}).get('订单数') if buckets_tong else None
+
+        if ring_cnt is not None and ring_cnt > 0:
+            ring_diff = cur_cnt - ring_cnt
+            ring_rate = round(ring_diff / ring_cnt * 100, 1)
+            ring_diff_str = f'{ring_diff:+d}'
+            ring_rate_str = f'{ring_rate:+.1f}%'
+            ring_color = RED if ring_diff < 0 else (GREEN if ring_diff > 0 else 'black')
+        else:
+            ring_diff_str = '-'
+            ring_rate_str = '-'
+            ring_color = 'black'
+
+        if tong_cnt is not None and tong_cnt > 0:
+            tong_diff = cur_cnt - tong_cnt
+            tong_rate = round(tong_diff / tong_cnt * 100, 1)
+            tong_diff_str = f'{tong_diff:+d}'
+            tong_rate_str = f'{tong_rate:+.1f}%'
+            tong_color = RED if tong_diff < 0 else (GREEN if tong_diff > 0 else 'black')
+        else:
+            tong_diff_str = '-'
+            tong_rate_str = '-'
+            tong_color = 'black'
+
         bkt_data.append([
             _p(bk, cell_c),
+            _p(str(cur_cnt), cell_c),
             _p(f"{cur_pct}%", cell_c),
-            _p(f"{ring_pct}%" if ring_pct is not None else '-', cell_c),
-            _p_color(ring_change, ring_color, cell_c),
-            _p(f"{tong_pct}%" if tong_pct is not None else '-', cell_c),
-            _p_color(tong_change, tong_color, cell_c),
+            _p_color(ring_diff_str, ring_color, cell_c),
+            _p_color(ring_rate_str, ring_color, cell_c),
+            _p_color(tong_diff_str, tong_color, cell_c),
+            _p_color(tong_rate_str, tong_color, cell_c),
         ])
 
-    bkt_table = Table(bkt_data, colWidths=[3.5*cm, 2.5*cm, 2.5*cm, 2.0*cm, 2.5*cm, 2.0*cm])
+    bkt_table = Table(bkt_data, colWidths=[3.5*cm, 2.0*cm, 2.0*cm, 2.2*cm, 2.0*cm, 2.2*cm, 2.0*cm])
     bkt_table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2c3e50')),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
