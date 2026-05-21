@@ -329,6 +329,46 @@ class DatabaseManager:
         ).fetchall()
         return [r[0] for r in rows]
 
+    # ── Period-based queries (for comparison analysis) ────────
+
+    def get_overview_for_period(self, start_date, end_date):
+        """Return daily_overview rows for a date range."""
+        return self.conn.execute(
+            "SELECT date, category, sub_category, 营业额, 百分比, 人数, 人均 "
+            "FROM daily_overview WHERE date BETWEEN ? AND ? "
+            "ORDER BY date, category, sub_category",
+            (start_date, end_date)
+        ).fetchall()
+
+    def get_buckets_for_period(self, start_date, end_date):
+        """Return daily_buckets rows for a date range."""
+        return self.conn.execute(
+            "SELECT date, bucket, 订单数, 占比 "
+            "FROM daily_buckets WHERE date BETWEEN ? AND ? "
+            "ORDER BY date, bucket",
+            (start_date, end_date)
+        ).fetchall()
+
+    def get_items_for_period(self, start_date, end_date):
+        """Return items rows for a date range (via order IDs in groups)."""
+        order_ids = self.conn.execute(
+            "SELECT DISTINCT first_order_id FROM groups "
+            "WHERE group_date BETWEEN ? AND ?",
+            (start_date, end_date)
+        ).fetchall()
+        oid_set = set(r[0] for r in order_ids)
+        if not oid_set:
+            return []
+        # Also get items for orders in those groups via items.订单号
+        all_items = []
+        for oid in oid_set:
+            rows = self.conn.execute(
+                "SELECT 订单号, 原始数据, source_file, ingest_time FROM items WHERE 订单号 = ?",
+                (oid,)
+            ).fetchall()
+            all_items.extend(rows)
+        return all_items
+
     # ── Maintenance ─────────────────────────────────────────
 
     def close(self):

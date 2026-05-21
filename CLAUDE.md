@@ -38,6 +38,12 @@ POS 系统同一桌客人多次扫码产生多笔独立订单，合并后才能�
 │   ├── daily_stats.py                #   每日统计计算（4个Sheet）
 │   ├── excel_writer.py               #   4-Sheet Excel 输出
 │   └── requirements.txt              #   pandas, openpyxl
+├── 周期对比分析/                      # ★ 新增：周期环比/同比对比分析
+│   ├── main.py                       #   CLI 入口，完整 pipeline
+│   ├── period_validator.py           #   周期完整性校验
+│   ├── comparator.py                 #   同比环比计算引擎
+│   ├── pdf_report.py                 #   PDF 对比报告生成
+│   └── requirements.txt              #   pandas, openpyxl, reportlab
 ```
 
 ## 常用命令
@@ -76,6 +82,21 @@ python3 main.py \
 
 输出：`长期订单分析_YYYYMMDD_YYYYMMDD.xlsx` + SQLite 数据库（持久化增量更新）
 Excel 含 4 个 Sheet：数据总览、订单数量明细、客单价区间分布、开单人统计
+
+### 周期对比分析（环比/同比）
+
+```bash
+cd 周期对比分析
+python3 main.py \
+    --excel "店内订单明细_2026-05-11+...xlsx" \
+    --db "../长期订单分析/output/长期订单分析.db" \
+    --mode week \
+    --store "万荷店" \
+    --output-dir ./output
+```
+
+输出：`周期对比分析_YYYYMMDD_YYYYMMDD_门店.pdf`
+含经营数据对比、重点菜品对比、客单价区间对比三大板块，环比/同比变化带颜色标注。
 
 ### 安装依赖
 
