@@ -101,8 +101,8 @@ def _calc_dish_rankings(items_data, target_dishes):
 
 
 def _calc_category_distribution(items_data):
-    """Calculate sales distribution by 商品中类. Returns {category: qty} sorted desc."""
-    cat_qty = {}
+    """Calculate revenue distribution by 商品中类. Returns [(cat, revenue), ...] sorted desc."""
+    cat_rev = {}
     for item_row in items_data:
         try:
             data = json.loads(item_row[1])
@@ -111,9 +111,9 @@ def _calc_category_distribution(items_data):
         cat = str(data.get('商品中类', '')).strip()
         if not cat or cat in ('nan', 'None', ''):
             continue
-        qty = float(data.get('数量', 0) or 0)
-        cat_qty[cat] = cat_qty.get(cat, 0) + int(qty)
-    return sorted(cat_qty.items(), key=lambda x: x[1], reverse=True)
+        rev = float(data.get('菜品收入', 0) or 0)
+        cat_rev[cat] = cat_rev.get(cat, 0) + rev
+    return sorted(cat_rev.items(), key=lambda x: x[1], reverse=True)
 
 
 def compute_comparison(db_manager, period_info, comparison_info, mode, store_name):
