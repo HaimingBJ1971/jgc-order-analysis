@@ -109,6 +109,8 @@ def generate_comparison_pdf(output_path, period_info, comparison_info, comp_data
         ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
     ]))
     story.append(op_table)
+    story.append(Spacer(1, 0.15*cm))
+    story.append(Paragraph('<font size="7" color="#666666">注：以上营业额已扣除外卖单、吧台及零食购买团体。</font>', normal_style))
     story.append(Spacer(1, 0.5*cm))
 
     # ── Section 2: Dish comparison ──
@@ -203,6 +205,28 @@ def generate_comparison_pdf(output_path, period_info, comparison_info, comp_data
                 _p_color(tong_rate_str, tong_color, cell_c),
             ])
 
+        # Totals row
+        cur_total_rev = sum(v for _, v in cats_cur_list)
+        ring_total_rev = sum(v for _, v in comp_data.get('cats_ringbi', []))
+        tong_total_rev = sum(v for _, v in comp_data.get('cats_tongbi', []))
+
+        ring_total_diff_str = f'{cur_total_rev - ring_total_rev:+,.0f}' if ring_total_rev > 0 else '-'
+        ring_total_rate_str = f'{(cur_total_rev - ring_total_rev) / ring_total_rev * 100:+.1f}%' if ring_total_rev > 0 else '-'
+        tong_total_diff_str = f'{cur_total_rev - tong_total_rev:+,.0f}' if tong_total_rev > 0 else '-'
+        tong_total_rate_str = f'{(cur_total_rev - tong_total_rev) / tong_total_rev * 100:+.1f}%' if tong_total_rev > 0 else '-'
+        ring_t_color = RED if ring_total_diff_str.startswith('-') else (GREEN if ring_total_diff_str.startswith('+') else 'black')
+        tong_t_color = RED if tong_total_diff_str.startswith('-') else (GREEN if tong_total_diff_str.startswith('+') else 'black')
+
+        cat_data.append([
+            _p('合计', cell_l),
+            _p(f'¥{cur_total_rev:,.0f}', cell_r),
+            _p('100%', cell_c),
+            _p_color(ring_total_diff_str, ring_t_color, cell_r),
+            _p_color(ring_total_rate_str, ring_t_color, cell_c),
+            _p_color(tong_total_diff_str, tong_t_color, cell_r),
+            _p_color(tong_total_rate_str, tong_t_color, cell_c),
+        ])
+
         cat_table = Table(cat_data, colWidths=[4.0*cm, 2.2*cm, 1.6*cm, 2.2*cm, 2.0*cm, 2.2*cm, 2.0*cm])
         cat_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2c3e50')),
@@ -212,15 +236,19 @@ def generate_comparison_pdf(output_path, period_info, comparison_info, comp_data
             ('FONTNAME', (0, 0), (-1, -1), _CHINESE_FONT),
             ('FONTSIZE', (0, 0), (-1, -1), 8),
             ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.whitesmoke, colors.white]),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.whitesmoke, colors.white]),
+            ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#FFF2CC')),
+            ('FONTNAME', (0, -1), (-1, -1), _CHINESE_FONT),
             ('TOPPADDING', (0, 0), (-1, -1), 4),
             ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
         ]))
         story.append(cat_table)
+        story.append(Spacer(1, 0.15*cm))
+        story.append(Paragraph('<font size="7" color="#666666">注：以上为全部订单（含外卖）的商品销售额，合计大于一、经营数据中的营业额。</font>', normal_style))
 
     story.append(Spacer(1, 0.5*cm))
 
-    # ── Section 3: Spending buckets ──
+    # ── Section 4: Spending buckets ──
     story.append(Paragraph('四、客单价区间对比', subtitle_style))
     story.append(Spacer(1, 0.2*cm))
 
