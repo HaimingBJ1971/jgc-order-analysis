@@ -31,7 +31,6 @@ sys.path.insert(0, os.path.abspath(_lt_dir))
 
 from db_manager import DatabaseManager
 from daily_stats import compute_all_daily_stats, _area, _meal_period, _compute_member_status, _compute_opener
-from multi_file_loader import load_and_dedup_excels
 
 from period_validator import validate_period, get_comparison_periods
 from comparator import compute_comparison
@@ -57,14 +56,20 @@ def main():
     print("\n[1/5] 加载数据...")
     db = DatabaseManager(args.db)
 
-    result = load_and_dedup_excels([args.excel], set())
-    if result['raw_orders'].empty:
+    raw_orders, raw_items = load_excel(args.excel)
+    if raw_orders.empty:
         print("  错误：没有有效订单数据")
         return
 
-    raw_orders = result['raw_orders']
-    raw_items = result['raw_items']
-    pre_merge_daily = result['pre_merge_daily']
+    # Extract pre-clean daily counts (matching merge tool)
+    pre_merge_daily = {}
+    if '下单时间' in raw_orders.columns:
+        raw_orders['_date'] = pd.to_datetime(raw_orders['下单时间'], errors='coerce').dt.strftime('%Y-%m-%d')
+        for date, grp in raw_orders.groupby('_date'):
+            count_raw = len(grp)
+            waimai = int(grp['桌台'].astype(str).str.contains('外点自取').sum())
+            fei_tangshi = int((grp['订单类型'] != '堂食').sum()) if '订单类型' in grp.columns else 0
+            pre_merge_daily[date] = {'原始订单数': count_raw, '外卖订单数': waimai, '非堂食订单数': fei_tangshi}
 
     # Determine store
     if args.store:
@@ -84,13 +89,8 @@ def main():
 
     # ── Step 2: Validate period ──
     print("\n[2/5] 校验周期...")
-    if raw_orders['下单时间'].dtype == 'object':
-        raw_orders['_dt'] = pd.to_datetime(raw_orders['下单时间'], errors='coerce')
-    else:
-        raw_orders['_dt'] = raw_orders['下单时间']
     dates_in_data = sorted(set(
-        d.strftime('%Y-%m-%d') for d in raw_orders['_dt'].dropna()
-        if hasattr(d, 'strftime')
+        d for d in raw_orders['_date'].dropna().unique() if d and d != 'NaT'
     ))
 
     period_info = validate_period(dates_in_data, args.mode)
@@ -125,41 +125,35 @@ def main():
     group_sum['是否会员'] = _compute_member_status(orders_with_group, group_sum)
     group_sum['_opener'] = _compute_opener(group_sum, orders_with_group)
 
-    all_dates_in_data = sorted(set(
-        d for d in group_sum['_date'].dropna().unique() if d and d != 'NaT'
-    ))
+    # Global filter (matching merge tool behavior, not per-date)
+    kept_groups, filter_stats = filter_groups(group_sum, items_clean if not items_clean.empty else None)
 
-    all_filtered = []
-    for date in all_dates_in_data:
-        day = group_sum[group_sum['_date'] == date].copy()
-        if day.empty:
-            continue
-        try:
-            filtered, fstats = filter_groups(day, items_clean if not items_clean.empty else None)
-            filtered['_date'] = date
-            filtered['_area'] = filtered['桌台'].apply(_area)
-            filtered['_meal'] = filtered['开始'].apply(_meal_period)
-            filtered['是否会员'] = _compute_member_status(orders_with_group, filtered)
-            filtered['_opener'] = _compute_opener(filtered, orders_with_group)
-            filtered['_filter_status'] = 'kept'
-            all_filtered.append(filtered)
-        except Exception as e:
-            print(f"    [警告] {date} 过滤出错: {e}")
+    # Tag filter status
+    kept_ids = set()
+    for _, g in kept_groups.iterrows():
+        for oid in (g.get('包含订单', []) or []):
+            kept_ids.add(str(oid))
 
-    if all_filtered:
-        kept_groups = pd.concat(all_filtered, ignore_index=True)
-    else:
-        kept_groups = pd.DataFrame()
+    def _tag_status(row):
+        oids = row.get('包含订单', []) or []
+        if any(str(o) in kept_ids for o in oids):
+            return 'kept'
+        row_rev = row.get('订单收入', 0) or 0
+        row_ppl = row.get('人均消费', 0) or 0
+        if row_ppl <= 0 or (isinstance(row_ppl, float) and pd.isna(row_ppl)):
+            return '免单'
+        return 'other'
+
+    group_sum['_filter_status'] = group_sum.apply(_tag_status, axis=1)
 
     # Write to DB
     print("  写入数据库...")
     source_file = os.path.basename(args.excel)
     db.insert_orders(raw_orders, source_file)
     db.insert_items(raw_items, source_file)
-    group_sum['_filter_status'] = 'kept'
     db.insert_groups(group_sum)
 
-    # Compute and write daily stats
+    # Compute and write daily stats (using tagged group_sum)
     stats_result = compute_all_daily_stats(
         group_sum, orders_with_group, pre_merge_daily,
         items_clean if not items_clean.empty else None
