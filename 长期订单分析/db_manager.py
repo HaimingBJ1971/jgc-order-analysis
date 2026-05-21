@@ -34,11 +34,13 @@ class DatabaseManager:
             CREATE TABLE IF NOT EXISTS items (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 订单号 TEXT NOT NULL,
+                商品编码 TEXT,
+                商品名称 TEXT,
                 原始数据 TEXT NOT NULL,
                 source_file TEXT,
-                ingest_time TEXT NOT NULL,
-                UNIQUE(订单号, 原始数据)
+                ingest_time TEXT NOT NULL
             );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_items_dedup ON items(订单号, 商品编码, 商品名称);
 
             CREATE TABLE IF NOT EXISTS groups (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -179,11 +181,13 @@ class DatabaseManager:
         return count
 
     def insert_items(self, items_df, source_file: str) -> int:
-        """Insert items into DB. Returns count of actually inserted rows."""
+        """Insert items into DB. Deduplicates by (订单号, 商品编码, 商品名称). Returns count inserted."""
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         count = 0
         for _, row in items_df.iterrows():
             order_id = str(row["订单号"])
+            item_code = str(row.get("商品编码", ""))
+            item_name = str(row.get("商品名称", ""))
             raw_json = json.dumps(
                 {k: str(v) if not isinstance(v, (int, float, bool, type(None))) else v
                  for k, v in row.to_dict().items()},
@@ -191,10 +195,11 @@ class DatabaseManager:
             )
             try:
                 self.conn.execute(
-                    "INSERT OR IGNORE INTO items (订单号, 原始数据, source_file, ingest_time) VALUES (?,?,?,?)",
-                    (order_id, raw_json, source_file, now)
+                    "INSERT OR IGNORE INTO items (订单号, 商品编码, 商品名称, 原始数据, source_file, ingest_time) VALUES (?,?,?,?,?,?)",
+                    (order_id, item_code, item_name, raw_json, source_file, now)
                 )
-                count += 1
+                if self.conn.total_changes > 0:
+                    count += 1
             except Exception:
                 continue
         self.conn.commit()
@@ -350,16 +355,24 @@ class DatabaseManager:
         ).fetchall()
 
     def get_items_for_period(self, start_date, end_date):
-        """Return items rows for a date range (via order IDs in groups)."""
-        order_ids = self.conn.execute(
-            "SELECT DISTINCT first_order_id FROM groups "
+        """Return items rows for a date range (via all order IDs in groups)."""
+        import json
+        rows = self.conn.execute(
+            "SELECT first_order_id, order_ids FROM groups "
             "WHERE group_date BETWEEN ? AND ?",
             (start_date, end_date)
         ).fetchall()
-        oid_set = set(r[0] for r in order_ids)
+        oid_set = set()
+        for first_oid, order_ids_json in rows:
+            oid_set.add(first_oid)
+            try:
+                merged = json.loads(order_ids_json) if order_ids_json else []
+                for oid in merged:
+                    oid_set.add(str(oid))
+            except (json.JSONDecodeError, TypeError):
+                pass
         if not oid_set:
             return []
-        # Also get items for orders in those groups via items.订单号
         all_items = []
         for oid in oid_set:
             rows = self.conn.execute(

@@ -80,17 +80,23 @@ def _aggr_daily_buckets(rows):
 
 
 def _calc_dish_rankings(items_data, target_dishes):
-    """Calculate dish sales rankings from items data. Returns {dish_name: qty} sorted desc."""
+    """Calculate dish sales rankings from items data. Deduplicates by (订单号, 商品编码, 商品名称)."""
     dish_qty = {}
     for dish in target_dishes:
         dish_qty[dish] = 0
+    seen = set()
     for item_row in items_data:
-        # item_row is (order_id, raw_json, source_file, ingest_time)
         try:
             data = json.loads(item_row[1])
         except (json.JSONDecodeError, TypeError):
             continue
+        oid = str(data.get('订单号', ''))
+        code = str(data.get('商品编码', ''))
         name = str(data.get('商品名称', ''))
+        key = (oid, code, name)
+        if key in seen:
+            continue
+        seen.add(key)
         qty = float(data.get('数量', 0) or 0)
         for dish in target_dishes:
             normalized_target = dish.replace('（', '(').replace('）', ')')
@@ -101,13 +107,21 @@ def _calc_dish_rankings(items_data, target_dishes):
 
 
 def _calc_category_distribution(items_data):
-    """Calculate revenue distribution by 商品中类. Returns [(cat, revenue), ...] sorted desc."""
+    """Calculate revenue distribution by 商品中类. Deduplicates by (订单号, 商品编码, 商品名称)."""
     cat_rev = {}
+    seen = set()
     for item_row in items_data:
         try:
             data = json.loads(item_row[1])
         except (json.JSONDecodeError, TypeError):
             continue
+        oid = str(data.get('订单号', ''))
+        code = str(data.get('商品编码', ''))
+        name = str(data.get('商品名称', ''))
+        key = (oid, code, name)
+        if key in seen:
+            continue
+        seen.add(key)
         cat = str(data.get('商品中类', '')).strip()
         if not cat or cat in ('nan', 'None', ''):
             continue
