@@ -127,25 +127,46 @@ def generate_comparison_pdf(output_path, period_info, comparison_info, comp_data
     ring_dishes_dict = dict(comp_data['dishes_ringbi'])
     tong_dishes_dict = dict(comp_data['dishes_tongbi'])
 
-    dish_header = ['菜品名称', '本期销量', '环比销量', '变化', '同比销量', '变化']
+    dish_header = ['菜品名称', '本期销量', '环比销量', '变化', '变化率', '同比销量', '变化', '变化率']
     dish_data = [dish_header]
     for name, qty in cur_dishes:
         ring_qty = ring_dishes_dict.get(name)
         tong_qty = tong_dishes_dict.get(name)
-        ring_change = f"{qty - ring_qty:+d}" if ring_qty is not None else '-'
-        tong_change = f"{qty - tong_qty:+d}" if tong_qty is not None else '-'
-        ring_color = RED if ring_change.startswith('-') else (GREEN if ring_change.startswith('+') else 'black')
-        tong_color = RED if tong_change.startswith('-') else (GREEN if tong_change.startswith('+') else 'black')
+
+        if ring_qty is not None and ring_qty > 0:
+            ring_diff = qty - ring_qty
+            ring_rate = round(ring_diff / ring_qty * 100, 1)
+            ring_diff_str = f'{ring_diff:+d}'
+            ring_rate_str = f'{ring_rate:+.1f}%'
+            ring_color = RED if ring_diff < 0 else (GREEN if ring_diff > 0 else 'black')
+        else:
+            ring_diff_str = '-'
+            ring_rate_str = '-'
+            ring_color = 'black'
+
+        if tong_qty is not None and tong_qty > 0:
+            tong_diff = qty - tong_qty
+            tong_rate = round(tong_diff / tong_qty * 100, 1)
+            tong_diff_str = f'{tong_diff:+d}'
+            tong_rate_str = f'{tong_rate:+.1f}%'
+            tong_color = RED if tong_diff < 0 else (GREEN if tong_diff > 0 else 'black')
+        else:
+            tong_diff_str = '-'
+            tong_rate_str = '-'
+            tong_color = 'black'
+
         dish_data.append([
             _p(name, cell_l),
             _p(str(qty), cell_c),
             _p(str(ring_qty) if ring_qty is not None else '-', cell_c),
-            _p_color(ring_change, ring_color, cell_c),
+            _p_color(ring_diff_str, ring_color, cell_c),
+            _p_color(ring_rate_str, ring_color, cell_c),
             _p(str(tong_qty) if tong_qty is not None else '-', cell_c),
-            _p_color(tong_change, tong_color, cell_c),
+            _p_color(tong_diff_str, tong_color, cell_c),
+            _p_color(tong_rate_str, tong_color, cell_c),
         ])
 
-    dish_table = Table(dish_data, colWidths=[5.0*cm, 2.0*cm, 2.0*cm, 1.8*cm, 2.0*cm, 1.8*cm])
+    dish_table = Table(dish_data, colWidths=[4.5*cm, 1.6*cm, 1.6*cm, 1.4*cm, 1.6*cm, 1.6*cm, 1.4*cm, 1.6*cm])
     dish_table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2c3e50')),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
