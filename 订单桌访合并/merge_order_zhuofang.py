@@ -567,6 +567,58 @@ def _s(text):
     return str(text)
 
 
+def _validate_closure(gs, total_revenue, total_people, store_name):
+    """校验数据总览各维度闭合，发现问题打印警告。"""
+    errors = []
+
+    # 1. 区域闭合（含"其他"警告）
+    area_rev = {}
+    area_ppl = {}
+    for area in ['包间', '大厅', '户外']:
+        mask = gs['_area'] == area
+        area_rev[area] = gs.loc[mask, '订单收入'].sum()
+        area_ppl[area] = int(gs.loc[mask, '团体人数'].sum())
+    other_rev = total_revenue - sum(area_rev.values())
+    other_ppl = total_people - sum(area_ppl.values())
+
+    if abs(other_rev) > 0.01 or other_ppl > 0:
+        other_tables = set(gs[~gs['_area'].isin(['包间', '大厅', '户外'])]['桌台'].unique())
+        errors.append(f'区域分类存在"其他"：营业额 ¥{other_rev:,.2f}，{other_ppl} 人，桌台: {sorted(other_tables)}')
+
+    sum_area_rev = sum(area_rev.values()) + other_rev
+    if abs(total_revenue - sum_area_rev) > 0.1:
+        errors.append(f'整体营业额 ¥{total_revenue:,.2f} ≠ 区域合计 ¥{sum_area_rev:,.2f}（差 ¥{total_revenue - sum_area_rev:,.2f}）')
+
+    # 2. 午市/晚市闭合
+    for meal, meal_label in [('午市', '午市（<16:00）'), ('晚市', '晚市（≥16:00）')]:
+        meal_mask = gs['_meal'] == meal
+        meal_rev = gs.loc[meal_mask, '订单收入'].sum()
+        meal_ppl = int(gs.loc[meal_mask, '团体人数'].sum())
+
+        meal_area_sum_rev = 0
+        meal_area_sum_ppl = 0
+        for area in ['包间', '大厅', '户外']:
+            mask = meal_mask & (gs['_area'] == area)
+            meal_area_sum_rev += gs.loc[mask, '订单收入'].sum()
+            meal_area_sum_ppl += int(gs.loc[mask, '团体人数'].sum())
+
+        gap_rev = meal_rev - meal_area_sum_rev
+        gap_ppl = meal_ppl - meal_area_sum_ppl
+        if abs(gap_rev) > 0.01 or gap_ppl != 0:
+            errors.append(f'{meal_label}：区域合计 ¥{meal_area_sum_rev:,.2f}（{meal_area_sum_ppl}人）≠ {meal_label}整体 ¥{meal_rev:,.2f}（{meal_ppl}人），缺口 ¥{gap_rev:,.2f}（{gap_ppl}人）')
+
+    # 3. 会员/非会员闭合
+    member_rev = gs.loc[gs['是否会员'] == True, '订单收入'].sum()
+    non_member_rev = gs.loc[gs['是否会员'] != True, '订单收入'].sum()
+    if abs(total_revenue - (member_rev + non_member_rev)) > 0.1:
+        errors.append(f'会员 ¥{member_rev:,.2f} + 非会员 ¥{non_member_rev:,.2f} ≠ 整体 ¥{total_revenue:,.2f}')
+
+    if errors:
+        print(f'\n  [数据闭合警告] {store_name}:')
+        for e in errors:
+            print(f'    ⚠ {e}')
+
+
 def generate_pdf_report(gs, group_items, stats, items_df, store_name, target_date, output_path, unrecognized=None):
     """生成统计分析 + 索引表 + 逐团体详情的 PDF"""
     page = A3
@@ -605,8 +657,8 @@ def generate_pdf_report(gs, group_items, stats, items_df, store_name, target_dat
 
     def _area(table_name):
         t = str(table_name)
-        if t.startswith('包间'): return '包间'
-        if t.startswith('大厅'): return '大厅'
+        if t.startswith(('包间', '包房')): return '包间'
+        if t.startswith(('大厅', '沙发')): return '大厅'
         if t.startswith('户外'): return '户外'
         return '其他'
 
@@ -667,6 +719,9 @@ def generate_pdf_report(gs, group_items, stats, items_df, store_name, target_dat
     non_member_mask = gs['是否会员'] == False
     rev, ppl, arpu = _seg_stats(non_member_mask)
     rows.append(_row('非会员（全天）', rev, ppl, arpu, _pct(rev, total_revenue), bold=True))
+
+    # ── 数据闭合校验 ──
+    _validate_closure(gs, total_revenue, int(total_people), store_name)
 
     # 一、数据总览
     story.append(Paragraph('一、数据总览', subtitle_style))

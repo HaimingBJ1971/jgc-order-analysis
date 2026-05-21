@@ -16,11 +16,11 @@ from collections import defaultdict
 def _area(table_name) -> str:
     """Classify table into area category."""
     t = str(table_name)
-    if '包间' in t:
+    if '包间' in t or '包房' in t:
         return '包间'
     if '户外' in t:
         return '户外'
-    if '大厅' in t:
+    if '大厅' in t or '沙发' in t:
         return '大厅'
     return '其他'
 
