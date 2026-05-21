@@ -159,42 +159,51 @@ def generate_comparison_pdf(output_path, period_info, comparison_info, comp_data
 
     if cats_cur_list:
         story.append(Spacer(1, 0.3*cm))
-        story.append(Paragraph('商品中类销售额分布', subtitle_style))
+        story.append(Paragraph('三、商品中类销售额分布', subtitle_style))
         story.append(Spacer(1, 0.2*cm))
 
-        # Compute total revenues for percentage calculations
         cur_total = sum(v for _, v in cats_cur_list)
-        ring_total = sum(v for _, v in comp_data.get('cats_ringbi', []))
-        tong_total = sum(v for _, v in comp_data.get('cats_tongbi', []))
 
-        cat_header = ['商品中类', '本期金额', '本期占比', '环比金额', '环比占比', '占比变化', '同比金额', '同比占比', '占比变化']
+        cat_header = ['商品中类', '本期金额', '本期占比', '环比变化', '环比变化率', '同比变化', '同比变化率']
         cat_data = [cat_header]
         for cat_name, rev in cats_cur_list:
             ring_rev = cats_ring.get(cat_name)
             tong_rev = cats_tong.get(cat_name)
-
             cur_pct = round(rev / cur_total * 100, 1) if cur_total > 0 else 0
-            ring_pct = round(ring_rev / ring_total * 100, 1) if ring_rev and ring_total > 0 else None
-            tong_pct = round(tong_rev / tong_total * 100, 1) if tong_rev and tong_total > 0 else None
 
-            ring_pct_change = f'{cur_pct - ring_pct:+.1f}%' if ring_pct is not None else '-'
-            tong_pct_change = f'{cur_pct - tong_pct:+.1f}%' if tong_pct is not None else '-'
-            ring_color = RED if ring_pct_change.startswith('-') else (GREEN if ring_pct_change.startswith('+') else 'black')
-            tong_color = RED if tong_pct_change.startswith('-') else (GREEN if tong_pct_change.startswith('+') else 'black')
+            if ring_rev is not None and ring_rev > 0:
+                ring_diff = rev - ring_rev
+                ring_rate = round(ring_diff / ring_rev * 100, 1)
+                ring_diff_str = f'{ring_diff:+,.0f}'
+                ring_rate_str = f'{ring_rate:+.1f}%'
+                ring_color = RED if ring_diff < 0 else (GREEN if ring_diff > 0 else 'black')
+            else:
+                ring_diff_str = '-'
+                ring_rate_str = '-'
+                ring_color = 'black'
+
+            if tong_rev is not None and tong_rev > 0:
+                tong_diff = rev - tong_rev
+                tong_rate = round(tong_diff / tong_rev * 100, 1)
+                tong_diff_str = f'{tong_diff:+,.0f}'
+                tong_rate_str = f'{tong_rate:+.1f}%'
+                tong_color = RED if tong_diff < 0 else (GREEN if tong_diff > 0 else 'black')
+            else:
+                tong_diff_str = '-'
+                tong_rate_str = '-'
+                tong_color = 'black'
 
             cat_data.append([
                 _p(cat_name, cell_l),
                 _p(f'¥{rev:,.0f}', cell_r),
                 _p(f'{cur_pct}%', cell_c),
-                _p(f'¥{ring_rev:,.0f}' if ring_rev is not None else '-', cell_r),
-                _p(f'{ring_pct}%' if ring_pct is not None else '-', cell_c),
-                _p_color(ring_pct_change, ring_color, cell_c),
-                _p(f'¥{tong_rev:,.0f}' if tong_rev is not None else '-', cell_r),
-                _p(f'{tong_pct}%' if tong_pct is not None else '-', cell_c),
-                _p_color(tong_pct_change, tong_color, cell_c),
+                _p_color(ring_diff_str, ring_color, cell_r),
+                _p_color(ring_rate_str, ring_color, cell_c),
+                _p_color(tong_diff_str, tong_color, cell_r),
+                _p_color(tong_rate_str, tong_color, cell_c),
             ])
 
-        cat_table = Table(cat_data, colWidths=[4.0*cm, 2.0*cm, 1.6*cm, 2.0*cm, 1.6*cm, 1.6*cm, 2.0*cm, 1.6*cm, 1.6*cm])
+        cat_table = Table(cat_data, colWidths=[4.0*cm, 2.2*cm, 1.6*cm, 2.2*cm, 2.0*cm, 2.2*cm, 2.0*cm])
         cat_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2c3e50')),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
@@ -212,7 +221,7 @@ def generate_comparison_pdf(output_path, period_info, comparison_info, comp_data
     story.append(Spacer(1, 0.5*cm))
 
     # ── Section 3: Spending buckets ──
-    story.append(Paragraph('三、客单价区间对比', subtitle_style))
+    story.append(Paragraph('四、客单价区间对比', subtitle_style))
     story.append(Spacer(1, 0.2*cm))
 
     buckets_cur = comp_data['buckets_current']
