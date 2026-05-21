@@ -67,17 +67,23 @@ def generate_comparison_pdf(output_path, period_info, comparison_info, comp_data
 
     # ── Title ──
     story.append(Paragraph(f'周期对比分析报告', title_style))
-    story.append(Paragraph(f'{store_name} | {period_info["period_label"]}', subtitle_style))
+    story.append(Paragraph(f'{store_name} ｜ 本期：{period_info["period_label"]}', subtitle_style))
+
+    ringbi_label = comparison_info.get('ringbi_label', '环比')
+    tongbi_label = comparison_info.get('tongbi_label', '同比')
+    ringbi_dates = f'{comparison_info["ringbi_start"]} ~ {comparison_info["ringbi_end"]}'
+    tongbi_dates = f'{comparison_info["tongbi_start"]} ~ {comparison_info["tongbi_end"]}'
+    story.append(Paragraph(
+        f'环比：{ringbi_label}（{ringbi_dates}）&nbsp;&nbsp;｜&nbsp;&nbsp;同比：{tongbi_label}（{tongbi_dates}）',
+        normal_style
+    ))
     story.append(Spacer(1, 0.5*cm))
 
     # ── Section 1: Operational data ──
     story.append(Paragraph('一、经营数据对比', subtitle_style))
     story.append(Spacer(1, 0.2*cm))
 
-    ringbi_label = comparison_info.get('ringbi_label', '环比')
-    tongbi_label = comparison_info.get('tongbi_label', '同比')
-
-    op_header = ['指标', '本期', f'环比({ringbi_label})', '', f'同比({tongbi_label})', '']
+    op_header = ['指标', '本期', '环比', '', '同比', '']
     op_subheader = ['', '', '变化', '变化%', '变化', '变化%']
     op_data = [op_header, op_subheader]
 
