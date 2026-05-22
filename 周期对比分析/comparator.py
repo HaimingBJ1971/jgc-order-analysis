@@ -130,6 +130,8 @@ def _calc_category_distribution(items_data):
     return sorted(cat_rev.items(), key=lambda x: x[1], reverse=True)
 
 
+import re
+
 DRINK_DESSERT_CATS = [
     '饮料和水果', '调饮汁', '甜品', '啤酒', '葡萄酒', '茶', '咖啡', '冰淇淋', '鸡尾酒',
     '饮料', '调饮', '鸡尾酒', '甜品Dessert',
@@ -160,6 +162,28 @@ def _calc_drink_dessert_rankings(items_data):
             continue
         dish_qty[name] = dish_qty.get(name, 0) + int(qty)
     return sorted(dish_qty.items(), key=lambda x: x[1], reverse=True)
+
+
+_SPEC_PATTERN = re.compile(r'[（(][^）)]*[）)]$')
+
+
+def _base_name(name):
+    """提取核心品名：去掉末尾括号内的规格描述（杯/小瓶/大瓶/扎/壶/盅等）"""
+    return _SPEC_PATTERN.sub('', name).strip()
+
+
+def _group_drinks(ranked_list):
+    """将核心品名相同的商品归组：组内按销量降序，组间按组内最高销量降序。"""
+    groups = {}
+    for name, qty in ranked_list:
+        base = _base_name(name)
+        if base not in groups:
+            groups[base] = []
+        groups[base].append((name, qty))
+    result = []
+    for base in sorted(groups, key=lambda b: max(q for _, q in groups[b]), reverse=True):
+        result.extend(sorted(groups[base], key=lambda x: x[1], reverse=True))
+    return result
 
 
 def compute_comparison(db_manager, period_info, comparison_info, mode, store_name):
@@ -279,7 +303,7 @@ def compute_comparison(db_manager, period_info, comparison_info, mode, store_nam
     result['dishes_tongbi'] = _calc_dish_rankings(items_tongbi, target_dishes)
 
     # Drink & dessert rankings
-    result['drinks_current'] = _calc_drink_dessert_rankings(items_current)
+    result['drinks_current'] = _group_drinks(_calc_drink_dessert_rankings(items_current))
     result['drinks_ringbi'] = _calc_drink_dessert_rankings(items_ringbi)
     result['drinks_tongbi'] = _calc_drink_dessert_rankings(items_tongbi)
 
