@@ -158,7 +158,8 @@ def _calc_drink_dessert_rankings(items_data):
             continue
         seen.add(key)
         qty = float(data.get('数量', 0) or 0)
-        if qty <= 0:
+        rev = float(data.get('菜品收入', -1) or -1)
+        if qty <= 0 or rev <= 0:
             continue
         dish_qty[name] = dish_qty.get(name, 0) + int(qty)
     return sorted(dish_qty.items(), key=lambda x: x[1], reverse=True)
