@@ -7,6 +7,7 @@ from docx import Document
 from docx.shared import Pt, Cm, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
 
 RED = RGBColor(0xC0, 0x39, 0x2B)
 GREEN = RGBColor(0x27, 0xAE, 0x60)
@@ -37,6 +38,9 @@ def _add_table(doc, headers, rows, col_widths=None):
     """Add a styled table. headers: list of str, rows: list of lists of (text, color_or_None, align)."""
     table = doc.add_table(rows=len(rows) + 1, cols=len(headers))
     table.style = 'Table Grid'
+    # Mark header row to repeat across pages
+    tr_pr = table.rows[0]._tr.get_or_add_trPr()
+    tr_pr.append(OxmlElement('w:tblHeader'))
     # Header
     for i, h in enumerate(headers):
         cell = table.rows[0].cells[i]
