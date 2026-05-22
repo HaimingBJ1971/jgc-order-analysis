@@ -99,7 +99,7 @@ def generate_comparison_pdf(output_path, period_info, comparison_info, comp_data
             _p_color(item['tongbi_pct'], tong_color, cell_r),
         ])
 
-    op_table = Table(op_data, colWidths=[4.5*cm, 2.5*cm, 2.5*cm, 2.0*cm, 2.5*cm, 2.0*cm])
+    op_table = Table(op_data, colWidths=[4.5*cm, 2.5*cm, 2.5*cm, 2.0*cm, 2.5*cm, 2.0*cm], repeatRows=2)
     op_table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 1), colors.HexColor('#2c3e50')),
         ('TEXTCOLOR', (0, 0), (-1, 1), colors.white),
@@ -158,7 +158,7 @@ def generate_comparison_pdf(output_path, period_info, comparison_info, comp_data
                 _p_color(tong_diff_str, tong_color, cell_c),
                 _p_color(tong_rate_str, tong_color, cell_c),
             ])
-        drink_table = Table(drink_data, colWidths=[4.5*cm, 1.6*cm, 1.6*cm, 1.4*cm, 1.6*cm, 1.6*cm, 1.4*cm, 1.6*cm])
+        drink_table = Table(drink_data, colWidths=[4.5*cm, 1.6*cm, 1.6*cm, 1.4*cm, 1.6*cm, 1.6*cm, 1.4*cm, 1.6*cm], repeatRows=1)
         drink_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2c3e50')),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
@@ -224,7 +224,7 @@ def generate_comparison_pdf(output_path, period_info, comparison_info, comp_data
             _p_color(tong_rate_str, tong_color, cell_c),
         ])
 
-    dish_table = Table(dish_data, colWidths=[4.5*cm, 1.6*cm, 1.6*cm, 1.4*cm, 1.6*cm, 1.6*cm, 1.4*cm, 1.6*cm])
+    dish_table = Table(dish_data, colWidths=[4.5*cm, 1.6*cm, 1.6*cm, 1.4*cm, 1.6*cm, 1.6*cm, 1.4*cm, 1.6*cm], repeatRows=1)
     dish_table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2c3e50')),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
@@ -312,7 +312,7 @@ def generate_comparison_pdf(output_path, period_info, comparison_info, comp_data
             _p_color(tong_total_rate_str, tong_t_color, cell_c),
         ])
 
-        cat_table = Table(cat_data, colWidths=[4.0*cm, 2.2*cm, 1.6*cm, 2.2*cm, 2.0*cm, 2.2*cm, 2.0*cm])
+        cat_table = Table(cat_data, colWidths=[4.0*cm, 2.2*cm, 1.6*cm, 2.2*cm, 2.0*cm, 2.2*cm, 2.0*cm], repeatRows=1)
         cat_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2c3e50')),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
@@ -382,7 +382,7 @@ def generate_comparison_pdf(output_path, period_info, comparison_info, comp_data
             _p_color(tong_rate_str, tong_color, cell_c),
         ])
 
-    bkt_table = Table(bkt_data, colWidths=[3.5*cm, 2.0*cm, 2.0*cm, 2.2*cm, 2.0*cm, 2.2*cm, 2.0*cm])
+    bkt_table = Table(bkt_data, colWidths=[3.5*cm, 2.0*cm, 2.0*cm, 2.2*cm, 2.0*cm, 2.2*cm, 2.0*cm], repeatRows=1)
     bkt_table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2c3e50')),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
