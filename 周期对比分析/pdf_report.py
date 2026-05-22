@@ -116,7 +116,7 @@ def generate_comparison_pdf(output_path, period_info, comparison_info, comp_data
     ]))
     story.append(op_table)
     story.append(Spacer(1, 0.15*cm))
-    story.append(Paragraph('<font size="7" color="#666666">注：以上营业额已扣除外卖单、吧台及零食购买团体。</font>', normal_style))
+    story.append(Paragraph('<font size="7" color="#666666">注：以上营业额已扣除自取外卖单、吧台及零食购买团体。第三方平台外卖单并未记入。</font>', normal_style))
     story.append(Spacer(1, 0.5*cm))
 
     # ── Section 2: Drink & dessert rankings ──
@@ -329,7 +329,7 @@ def generate_comparison_pdf(output_path, period_info, comparison_info, comp_data
         ]))
         story.append(cat_table)
         story.append(Spacer(1, 0.15*cm))
-        story.append(Paragraph('<font size="7" color="#666666">注：以上为全部订单（含外卖）的商品销售额，合计大于一、经营数据中的营业额。</font>', normal_style))
+        story.append(Paragraph('<font size="7" color="#666666">注：以上为包含自取外卖订单和吧台及零食购买团体的商品销售额，合计大于第一部分经营数据中的营业额。第三方平台外卖单并未记入。</font>', normal_style))
 
     story.append(Spacer(1, 0.5*cm))
 
