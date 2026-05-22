@@ -12,7 +12,7 @@ POS 系统同一桌客人多次扫码产生多笔独立订单，合并后才能�
 
 ```
 订单与桌访合并/
-├── PRD.md                            # 完整 PRD（v3.10），所有规则与参数定义
+├── PRD.md                            # 完整 PRD（v3.11），所有规则与参数定义
 ├── 订单桌访合并/                      # ★ 主工具：订单+桌访合并分析
 │   ├── merge_order_zhuofang.py       #   CLI 入口，完整 pipeline（唯一入口文件）
 │   ├── requirements.txt              #   pandas, openpyxl, reportlab
@@ -43,7 +43,8 @@ POS 系统同一桌客人多次扫码产生多笔独立订单，合并后才能�
 │   ├── period_validator.py           #   周期完整性校验
 │   ├── comparator.py                 #   同比环比计算引擎
 │   ├── pdf_report.py                 #   PDF 对比报告生成
-│   └── requirements.txt              #   pandas, openpyxl, reportlab
+│   ├── word_report.py                #   Word 对比报告生成
+│   └── requirements.txt              #   pandas, openpyxl, reportlab, python-docx
 ```
 
 ## 常用命令
@@ -95,8 +96,8 @@ python3 main.py \
     --output-dir ./output
 ```
 
-输出：`周期对比分析_YYYYMMDD_YYYYMMDD_门店.pdf`
-含经营数据对比、重点菜品对比、客单价区间对比三大板块，环比/同比变化带颜色标注。
+输出：`周期对比分析_YYYYMMDD_YYYYMMDD_门店.pdf` + `.docx`
+含五个章节：经营数据、酒水饮料甜品排行、重点菜品、商品中类销售额、客单价区间，环比/同比变化带颜色标注。
 
 ### 安装依赖
 

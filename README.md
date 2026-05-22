@@ -1,6 +1,6 @@
 # 金谷仓餐厅订单与桌访合并分析系统
 
-金谷仓餐厅（万荷店、保利店、湾里店）日常经营数据分析工具。核心功能：将 POS 散单合并为消费团体 → 关联桌访反馈修正人数 → 重新计算人均消费 → 输出 PDF/MD 报告。
+金谷仓餐厅（万荷店、保利店、湾里店）日常经营数据分析系统，包含三大工具：订单+桌访合并分析、长期订单分析、周期对比分析。
 
 ## 背景
 
@@ -33,6 +33,13 @@ POS 系统同一桌客人多次扫码产生多笔独立订单，合并后才能�
 │   ├── daily_stats.py                   #     每日统计计算
 │   ├── excel_writer.py                  #     4-Sheet Excel 输出
 │   └── requirements.txt                 #     pandas, openpyxl
+└── 周期对比分析/                          #   环比/同比周期对比
+    ├── main.py                          #     CLI 入口
+    ├── period_validator.py              #     周期校验
+    ├── comparator.py                    #     对比计算
+    ├── pdf_report.py                    #     PDF 输出
+    ├── word_report.py                   #     Word 输出
+    └── requirements.txt                 #     pandas, openpyxl, reportlab, python-docx
 ```
 
 ## 快速开始
@@ -40,7 +47,7 @@ POS 系统同一桌客人多次扫码产生多笔独立订单，合并后才能�
 ### 安装依赖
 
 ```bash
-pip install pandas openpyxl reportlab
+pip install pandas openpyxl reportlab python-docx
 ```
 
 ### 订单+桌访合并分析（主工具）
@@ -74,6 +81,20 @@ python3 main.py \
 ```
 
 输出：`长期订单分析_YYYYMMDD_YYYYMMDD.xlsx` + SQLite 数据库（支持增量更新）
+
+### 周期对比分析（环比/同比）
+
+```bash
+cd 周期对比分析
+python3 main.py \
+    --excel "店内订单明细_2026-05-11+...xlsx" \
+    --db "../长期订单分析/output/长期订单分析.db" \
+    --mode week \
+    --store "万荷店" \
+    --output-dir ./output
+```
+
+输出：`周期对比分析_YYYYMMDD_YYYYMMDD_门店.pdf` + `.docx`
 
 ## 核心算法
 
