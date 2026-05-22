@@ -130,6 +130,38 @@ def _calc_category_distribution(items_data):
     return sorted(cat_rev.items(), key=lambda x: x[1], reverse=True)
 
 
+DRINK_DESSERT_CATS = [
+    '饮料和水果', '调饮汁', '甜品', '啤酒', '葡萄酒', '茶', '咖啡', '冰淇淋', '鸡尾酒',
+    '饮料', '调饮', '鸡尾酒', '甜品Dessert',
+]
+
+
+def _calc_drink_dessert_rankings(items_data):
+    """酒水饮料甜品排行：从中类筛选，按商品名称汇总销量降序。"""
+    dish_qty = {}
+    seen = set()
+    for item_row in items_data:
+        try:
+            data = json.loads(item_row[1])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        cat = str(data.get('商品中类', '')).strip()
+        if cat not in DRINK_DESSERT_CATS:
+            continue
+        oid = str(data.get('订单号', ''))
+        code = str(data.get('商品编码', ''))
+        name = str(data.get('商品名称', ''))
+        key = (oid, code, name)
+        if key in seen:
+            continue
+        seen.add(key)
+        qty = float(data.get('数量', 0) or 0)
+        if qty <= 0:
+            continue
+        dish_qty[name] = dish_qty.get(name, 0) + int(qty)
+    return sorted(dish_qty.items(), key=lambda x: x[1], reverse=True)
+
+
 def compute_comparison(db_manager, period_info, comparison_info, mode, store_name):
     """
     Master comparison function.
@@ -245,6 +277,11 @@ def compute_comparison(db_manager, period_info, comparison_info, mode, store_nam
     result['dishes_current'] = _calc_dish_rankings(items_current, target_dishes)
     result['dishes_ringbi'] = _calc_dish_rankings(items_ringbi, target_dishes)
     result['dishes_tongbi'] = _calc_dish_rankings(items_tongbi, target_dishes)
+
+    # Drink & dessert rankings
+    result['drinks_current'] = _calc_drink_dessert_rankings(items_current)
+    result['drinks_ringbi'] = _calc_drink_dessert_rankings(items_ringbi)
+    result['drinks_tongbi'] = _calc_drink_dessert_rankings(items_tongbi)
 
     # Category distribution
     result['cats_current'] = _calc_category_distribution(items_current)

@@ -119,8 +119,66 @@ def generate_comparison_pdf(output_path, period_info, comparison_info, comp_data
     story.append(Paragraph('<font size="7" color="#666666">注：以上营业额已扣除外卖单、吧台及零食购买团体。</font>', normal_style))
     story.append(Spacer(1, 0.5*cm))
 
-    # ── Section 2: Dish comparison ──
-    story.append(Paragraph('二、重点菜品对比', subtitle_style))
+    # ── Section 2: Drink & dessert rankings ──
+    story.append(Paragraph('二、酒水饮料甜品销售排行', subtitle_style))
+    story.append(Spacer(1, 0.2*cm))
+
+    drinks_cur = comp_data.get('drinks_current', [])
+    drinks_ring = dict(comp_data.get('drinks_ringbi', []))
+    drinks_tong = dict(comp_data.get('drinks_tongbi', []))
+
+    if drinks_cur:
+        drink_header = ['商品名称', '本期销量', '环比销量', '变化', '变化率', '同比销量', '变化', '变化率']
+        drink_data = [drink_header]
+        for name, qty in drinks_cur:
+            ring_qty = drinks_ring.get(name)
+            tong_qty = drinks_tong.get(name)
+            if ring_qty is not None and ring_qty > 0:
+                ring_diff = qty - ring_qty
+                ring_rate = round(ring_diff / ring_qty * 100, 1)
+                ring_diff_str = f'{ring_diff:+d}'
+                ring_rate_str = f'{ring_rate:+.1f}%'
+                ring_color = RED if ring_diff < 0 else (GREEN if ring_diff > 0 else 'black')
+            else:
+                ring_diff_str = '-'; ring_rate_str = '-'; ring_color = 'black'
+            if tong_qty is not None and tong_qty > 0:
+                tong_diff = qty - tong_qty
+                tong_rate = round(tong_diff / tong_qty * 100, 1)
+                tong_diff_str = f'{tong_diff:+d}'
+                tong_rate_str = f'{tong_rate:+.1f}%'
+                tong_color = RED if tong_diff < 0 else (GREEN if tong_diff > 0 else 'black')
+            else:
+                tong_diff_str = '-'; tong_rate_str = '-'; tong_color = 'black'
+            drink_data.append([
+                _p(name, cell_l), _p(str(qty), cell_c),
+                _p(str(ring_qty) if ring_qty is not None else '-', cell_c),
+                _p_color(ring_diff_str, ring_color, cell_c),
+                _p_color(ring_rate_str, ring_color, cell_c),
+                _p(str(tong_qty) if tong_qty is not None else '-', cell_c),
+                _p_color(tong_diff_str, tong_color, cell_c),
+                _p_color(tong_rate_str, tong_color, cell_c),
+            ])
+        drink_table = Table(drink_data, colWidths=[4.5*cm, 1.6*cm, 1.6*cm, 1.4*cm, 1.6*cm, 1.6*cm, 1.4*cm, 1.6*cm])
+        drink_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2c3e50')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('FONTNAME', (0, 0), (-1, -1), _CHINESE_FONT),
+            ('FONTSIZE', (0, 0), (-1, -1), 8),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.whitesmoke, colors.white]),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ]))
+        story.append(drink_table)
+    else:
+        story.append(Paragraph('（无数据）', normal_style))
+
+    story.append(Spacer(1, 0.5*cm))
+
+    # ── Section 3: Dish comparison ──
+    story.append(Paragraph('三、重点菜品对比', subtitle_style))
     story.append(Spacer(1, 0.2*cm))
 
     cur_dishes = comp_data['dishes_current']
@@ -188,7 +246,7 @@ def generate_comparison_pdf(output_path, period_info, comparison_info, comp_data
 
     if cats_cur_list:
         story.append(Spacer(1, 0.3*cm))
-        story.append(Paragraph('三、商品中类销售额分布', subtitle_style))
+        story.append(Paragraph('四、商品中类销售额分布', subtitle_style))
         story.append(Spacer(1, 0.2*cm))
 
         cur_total = sum(v for _, v in cats_cur_list)
@@ -275,8 +333,8 @@ def generate_comparison_pdf(output_path, period_info, comparison_info, comp_data
 
     story.append(Spacer(1, 0.5*cm))
 
-    # ── Section 4: Spending buckets ──
-    story.append(Paragraph('四、客单价区间对比', subtitle_style))
+    # ── Section 5: Spending buckets ──
+    story.append(Paragraph('五、客单价区间对比', subtitle_style))
     story.append(Spacer(1, 0.2*cm))
 
     buckets_cur = comp_data['buckets_current']
