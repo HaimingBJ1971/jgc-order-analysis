@@ -124,13 +124,18 @@ def generate_comparison_pdf(output_path, period_info, comparison_info, comp_data
     story.append(Spacer(1, 0.2*cm))
 
     drinks_cur = comp_data.get('drinks_current', [])
-    drinks_ring = dict(comp_data.get('drinks_ringbi', []))
-    drinks_tong = dict(comp_data.get('drinks_tongbi', []))
+    # ringbi/tongbi are also [(name, {'qty': ..., 'cat': ...}), ...]; extract qty
+    drinks_ring = {name: (info['qty'] if isinstance(info, dict) else info)
+                   for name, info in comp_data.get('drinks_ringbi', [])}
+    drinks_tong = {name: (info['qty'] if isinstance(info, dict) else info)
+                   for name, info in comp_data.get('drinks_tongbi', [])}
 
     if drinks_cur:
-        drink_header = ['商品名称', '本期销量', '环比销量', '变化', '变化率', '同比销量', '变化', '变化率']
+        drink_header = ['商品分类', '商品名称', '本期销量', '环比销量', '变化', '变化率', '同比销量', '变化', '变化率']
         drink_data = [drink_header]
-        for name, qty in drinks_cur:
+        for name, info in drinks_cur:
+            qty = info['qty'] if isinstance(info, dict) else info
+            cat_name = info.get('cat', '') if isinstance(info, dict) else ''
             ring_qty = drinks_ring.get(name)
             tong_qty = drinks_tong.get(name)
             if ring_qty is not None and ring_qty > 0:
@@ -150,6 +155,7 @@ def generate_comparison_pdf(output_path, period_info, comparison_info, comp_data
             else:
                 tong_diff_str = '-'; tong_rate_str = '-'; tong_color = 'black'
             drink_data.append([
+                _p(cat_name, cell_l),
                 _p(name, cell_l), _p(str(qty), cell_c),
                 _p(str(ring_qty) if ring_qty is not None else '-', cell_c),
                 _p_color(ring_diff_str, ring_color, cell_c),
@@ -158,7 +164,7 @@ def generate_comparison_pdf(output_path, period_info, comparison_info, comp_data
                 _p_color(tong_diff_str, tong_color, cell_c),
                 _p_color(tong_rate_str, tong_color, cell_c),
             ])
-        drink_table = Table(drink_data, colWidths=[4.5*cm, 1.6*cm, 1.6*cm, 1.4*cm, 1.6*cm, 1.6*cm, 1.4*cm, 1.6*cm], repeatRows=1)
+        drink_table = Table(drink_data, colWidths=[3.0*cm, 4.0*cm, 1.4*cm, 1.4*cm, 1.2*cm, 1.4*cm, 1.4*cm, 1.2*cm, 1.4*cm], repeatRows=1)
         drink_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2c3e50')),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),

@@ -139,8 +139,10 @@ DRINK_DESSERT_CATS = [
 
 
 def _calc_drink_dessert_rankings(items_data):
-    """酒水饮料甜品排行：从中类筛选，按商品名称汇总销量降序。"""
-    dish_qty = {}
+    """酒水饮料甜品排行：从中类筛选，按商品名称汇总销量降序。
+    Returns [(name, qty, cat), ...] with cat being the 商品中类.
+    """
+    dish_info = {}  # name -> {'qty': int, 'cat': str}
     seen = set()
     for item_row in items_data:
         try:
@@ -161,8 +163,10 @@ def _calc_drink_dessert_rankings(items_data):
         rev = float(data.get('菜品收入', -1) or -1)
         if qty <= 0 or rev <= 0:
             continue
-        dish_qty[name] = dish_qty.get(name, 0) + int(qty)
-    return sorted(dish_qty.items(), key=lambda x: x[1], reverse=True)
+        if name not in dish_info:
+            dish_info[name] = {'qty': 0, 'cat': cat}
+        dish_info[name]['qty'] += int(qty)
+    return sorted(dish_info.items(), key=lambda x: x[1]['qty'], reverse=True)
 
 
 _SPEC_PATTERN = re.compile(r'[（(][^）)]*[）)]$')
@@ -176,14 +180,14 @@ def _base_name(name):
 def _group_drinks(ranked_list):
     """将核心品名相同的商品归组：组内按销量降序，组间按组内最高销量降序。"""
     groups = {}
-    for name, qty in ranked_list:
+    for name, info in ranked_list:
         base = _base_name(name)
         if base not in groups:
             groups[base] = []
-        groups[base].append((name, qty))
+        groups[base].append((name, info))
     result = []
-    for base in sorted(groups, key=lambda b: max(q for _, q in groups[b]), reverse=True):
-        result.extend(sorted(groups[base], key=lambda x: x[1], reverse=True))
+    for base in sorted(groups, key=lambda b: max(i['qty'] for _, i in groups[b]), reverse=True):
+        result.extend(sorted(groups[base], key=lambda x: x[1]['qty'], reverse=True))
     return result
 
 
