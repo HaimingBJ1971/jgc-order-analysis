@@ -35,6 +35,7 @@ from daily_stats import compute_all_daily_stats, _area, _meal_period, _compute_m
 from period_validator import validate_period, get_comparison_periods
 from comparator import compute_comparison
 from pdf_report import generate_comparison_pdf
+from word_report import generate_comparison_word
 
 
 def main():
@@ -190,6 +191,11 @@ def main():
 
     generate_comparison_pdf(pdf_path, period_info, comparison_info, comp_data, args.mode, store_name)
     print(f"PDF 报告已生成: {pdf_path}")
+
+    # Word output
+    word_name = f'周期对比分析_{date_tag}_{store_name}.docx'
+    word_path = os.path.join(args.output_dir, word_name)
+    generate_comparison_word(word_path, period_info, comparison_info, comp_data, args.mode, store_name)
 
     db.close()
     print("\n完成！")
