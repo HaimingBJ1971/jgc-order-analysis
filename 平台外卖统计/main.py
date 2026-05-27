@@ -239,7 +239,7 @@ def main():
     # PDF Report
     pdf_path = os.path.join(args.output_dir, f"平台外卖统计_{date_tag}.pdf")
     generate_takeaway_pdf_report(
-        pdf_path, summary, store_comp, platform_stats, meal_dist, eff_stats, overtime_list, start_date, end_date
+        pdf_path, summary, store_comp, platform_stats, meal_dist, eff_stats, overtime_list, start_date, end_date, daily_trends
     )
     
     # Markdown Report

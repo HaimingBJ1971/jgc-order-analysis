@@ -1,13 +1,18 @@
 import os
+import tempfile
 from datetime import datetime
 from html import escape as html_escape
+
+import matplotlib
+matplotlib.use('Agg')  # Headless backend to avoid GUI conflict
+import matplotlib.pyplot as plt
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import cm
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, Image
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
@@ -39,7 +44,7 @@ def _p(text, style):
 def _p_bold(text, style):
     return Paragraph(f"<b>{html_escape(str(text))}</b>", style)
 
-def generate_takeaway_pdf_report(output_path, summary_data, store_comp_df, platform_stats_df, meal_df, eff_df, overtime_df, start_date, end_date):
+def generate_takeaway_pdf_report(output_path, summary_data, store_comp_df, platform_stats_df, meal_df, eff_df, overtime_df, start_date, end_date, daily_trends=None):
     """
     Generates a beautifully formatted summary A4 PDF report in Chinese.
     """
@@ -240,5 +245,119 @@ def generate_takeaway_pdf_report(output_path, summary_data, store_comp_df, platf
         story.append(Spacer(1, 0.25 * cm))
         story.append(Paragraph(f'注：本周期共产生 <b>{ot_count}</b> 个配送超时关注单 (下单至送达耗时超过 45 分钟)。详细清单参见 Excel 报表。', normal_style))
         
-    doc.build(story)
-    print(f"Summary PDF report successfully written to: {output_path}")
+    # 6. Section 5: 每日趋势与细分统计 (时间段跨天时展示)
+    chart_img_path = None
+    if start_date != end_date and daily_trends is not None and not daily_trends.empty:
+        # 新页起始
+        story.append(PageBreak())
+        story.append(Paragraph('五、每日外卖营业趋势分析', subtitle_style))
+        story.append(Paragraph('本统计周期跨越多个营业日，各门店每日有效外卖订单数量及实收营业额（订单收入）波动走势如下所示：', normal_style))
+        story.append(Spacer(1, 0.4 * cm))
+        
+        # 绘制折线图
+        try:
+            df_chart = daily_trends.copy()
+            df_chart["营业日"] = df_chart["营业日"].astype(str)
+            all_dates = sorted(df_chart["营业日"].unique())
+            all_stores = sorted(df_chart["门店"].unique())
+            
+            # Matplotlib 绘图配置
+            fig, ax = plt.subplots(figsize=(10, 4.5), dpi=300)
+            
+            # 支持中文的字体设置 (macOS 下 Arial Unicode MS / PingFang SC 极佳)
+            plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'PingFang SC', 'STHeiti', 'Heiti SC', 'sans-serif']
+            plt.rcParams['axes.unicode_minus'] = False
+            
+            # 专属色系
+            store_colors = {
+                "万荷店": "#1f4e78",
+                "保利店": "#e74c3c",
+                "湾里店": "#f39c12"
+            }
+            
+            for store in all_stores:
+                store_df = df_chart[df_chart["门店"] == store].set_index("营业日")
+                # 对齐所有日期，缺失的填充 0
+                y_vals = [float(store_df.loc[d, "订单收入"]) if d in store_df.index else 0.0 for d in all_dates]
+                x_labels = [d[5:] if len(d) == 10 else d for d in all_dates]  # 简写为 MM-DD 格式
+                
+                color = store_colors.get(store, None)
+                line, = ax.plot(x_labels, y_vals, marker='o', linewidth=2.5, markersize=6, label=store, color=color)
+                
+                # 数据标签 (天数不超过 14 天时标记)
+                if len(all_dates) <= 14:
+                    for x_idx, y_val in enumerate(y_vals):
+                        if y_val > 0:
+                            ax.text(x_idx, y_val + (max(y_vals) * 0.015), f"¥{y_val:.0f}", 
+                                    ha='center', va='bottom', fontsize=8, color=line.get_color(), weight='bold')
+            
+            ax.set_title("每日外卖实收营业额变化趋势", fontsize=12, fontweight='bold', pad=12, color='#2c3e50')
+            ax.set_xlabel("营业日 (月-日)", fontsize=9, labelpad=8, color='#34495e')
+            ax.set_ylabel("外卖订单收入 (元)", fontsize=9, labelpad=8, color='#34495e')
+            ax.grid(True, linestyle='--', alpha=0.5, color='#cccccc')
+            ax.legend(loc="upper left", frameon=True, facecolor='#ffffff', edgecolor='#dddddd')
+            
+            y_max = df_chart["订单收入"].max()
+            if y_max > 0:
+                ax.set_ylim(0, y_max * 1.15)
+                
+            for spine in ['top', 'right']:
+                ax.spines[spine].set_visible(False)
+                
+            plt.tight_layout()
+            
+            # 保存到临时路径
+            temp_dir = tempfile.gettempdir()
+            import uuid
+            chart_img_path = os.path.join(temp_dir, f"takeaway_daily_chart_{uuid.uuid4().hex}.png")
+            fig.savefig(chart_img_path, dpi=300)
+            plt.close(fig)
+            
+            story.append(Image(chart_img_path, width=15*cm, height=6.75*cm))
+            story.append(Spacer(1, 0.4 * cm))
+            
+        except Exception as e:
+            print(f"⚠ 绘制折线图出错: {e}")
+            story.append(Paragraph(f"[⚠ 趋势折线图生成失败: {e}]", normal_style))
+            story.append(Spacer(1, 0.4 * cm))
+
+        # 每日明细表格
+        story.append(Paragraph('<b>每日外卖营业明细统计:</b>', normal_style))
+        story.append(Spacer(1, 0.15 * cm))
+        
+        daily_hdr = ["营业日", "门店", "有效订单", "订单收入", "顾客实付", "外卖客单价"]
+        daily_rows = [[_p(h, hdr_style) for h in daily_hdr]]
+        
+        df_table = daily_trends.sort_values(["营业日", "门店"]).copy()
+        for _, r in df_table.iterrows():
+            daily_rows.append([
+                _p(r["营业日"], cell_c),
+                _p(r["门店"], cell_c),
+                _p(f"{r['有效订单数']:.0f} 单", cell_r),
+                _p(f"¥{r['订单收入']:,.2f}", cell_r),
+                _p(f"¥{r['顾客实付']:,.2f}", cell_r),
+                _p(f"¥{r['客单价']:,.2f}", cell_r),
+            ])
+            
+        daily_table = Table(daily_rows, colWidths=[3.0*cm, 2.5*cm, 2.0*cm, 3.0*cm, 3.0*cm, 2.5*cm])
+        daily_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1f4e78')),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#D3D3D3')),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F9FAFB')]),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ]))
+        story.append(daily_table)
+
+    try:
+        doc.build(story)
+        print(f"Summary PDF report successfully written to: {output_path}")
+    finally:
+        # 清理临时折线图文件
+        if chart_img_path and os.path.exists(chart_img_path):
+            try:
+                os.remove(chart_img_path)
+            except Exception as e:
+                print(f"⚠ 清理临时折线图文件失败: {e}")
+
