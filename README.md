@@ -33,13 +33,21 @@ POS 系统同一桌客人多次扫码产生多笔独立订单，合并后才能�
 │   ├── daily_stats.py                   #     每日统计计算
 │   ├── excel_writer.py                  #     4-Sheet Excel 输出
 │   └── requirements.txt                 #     pandas, openpyxl
-└── 周期对比分析/                          #   环比/同比周期对比
-    ├── main.py                          #     CLI 入口
-    ├── period_validator.py              #     周期校验
-    ├── comparator.py                    #     对比计算
-    ├── pdf_report.py                    #     PDF 输出
-    ├── word_report.py                   #     Word 输出
-    └── requirements.txt                 #     pandas, openpyxl, reportlab, python-docx
+├── 周期对比分析/                          #   环比/同比周期对比
+│   ├── main.py                          #     CLI 入口
+│   ├── period_validator.py              #     周期校验
+│   ├── comparator.py                    #     对比计算
+│   ├── pdf_report.py                    #     PDF 输出
+│   ├── word_report.py                   #     Word 输出
+│   └── requirements.txt                 #     pandas, openpyxl, reportlab, python-docx
+└── 平台外卖统计/                          # ★ 新增：平台外卖数据统计分析
+    ├── main.py                          #     CLI 入口，完整 pipeline
+    ├── takeaway_loader.py               #     外卖 Excel 加载、清洗、脱敏
+    ├── takeaway_stats.py                #     多维外卖经营数据聚合
+    ├── excel_writer.py                  #     8-Sheet Excel 输出
+    ├── pdf_report.py                    #     A4 中文摘要 PDF 报告
+    ├── db_manager.py                    #     SQLite 增量归档存储
+    └── requirements.txt                 #     pandas, openpyxl, reportlab
 ```
 
 ## 快速开始
@@ -95,6 +103,39 @@ python3 main.py \
 ```
 
 输出：`周期对比分析_YYYYMMDD_YYYYMMDD_门店.pdf` + `.docx`
+
+### 平台外卖统计 (平台经营数据分析)
+
+```bash
+cd 平台外卖统计
+python3 main.py \
+    --files "../原始数据/万荷平台外卖订单明细2026-05-18+00_00_00~2026-05-24+23_59_59.xlsx" \
+            "../原始数据/保利平台外卖订单明细2026-05-18+00_00_00~2026-05-24+23_59_59.xlsx" \
+    --db "../长期订单分析/output/长期订单分析.db" \
+    --output-dir ./output
+```
+
+输出：
+- `平台外卖统计_YYYYMMDD_YYYYMMDD.xlsx` — 8-Sheet 格式化外卖分析 Excel
+- `平台外卖统计_YYYYMMDD_YYYYMMDD.pdf` — 中文 A4 外卖摘要 PDF 报告
+- `平台外卖统计_YYYYMMDD_YYYYMMDD.md` — 易于复制的 Markdown 简报
+- 数据库增量归档 — 订单数据自动脱敏写入 SQLite `takeaway_*` 系列表
+
+### GUI 控制台 (统一图形化操作界面)
+
+```bash
+# 启动 GUI 桌面控制台
+.venv/bin/python3 GUI控制台/main.py
+```
+
+**界面特性**：
+- **极客暗黑主题**：高阶 QSS 视觉体系，带呼吸效果的交互指示和文件拖入高亮。
+- **全拖拽支持**：支持拖入单个/多个文件或文件夹，自动识别分类（POS Excel, 桌访 CSV, 外卖 Excel, SQLite 数据库）。
+- **实时预校验**：在后台线程提取 Excel 表头和结构进行预检，Error 级别时禁用运行按钮，Warning 级别提供风险评估。
+- **异步安全任务引擎**：利用 QProcess 异步调度分析命令，实时截获 stdout/stderr 渲染到嵌入式控制台，并配备 SQLite 写入锁防止数据库并发冲突。
+- **多功能支持**：集成订单+桌访合并、长期订单分析、周期对比分析、平台外卖统计以及全局参数偏好保存五大功能面板。
+
+
 
 ## 核心算法
 

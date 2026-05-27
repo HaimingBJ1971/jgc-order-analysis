@@ -1,0 +1,178 @@
+import os
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QComboBox, QLineEdit, QPushButton, QFileDialog
+from PySide6.QtCore import Signal
+
+from widgets.drop_zone import DropZone
+from widgets.file_list import FileListWidget
+from widgets.validation_panel import ValidationPanel
+from widgets.log_panel import LogPanel
+from validators import scan_files, classify_files, validate_period_compare
+
+class PeriodCompareView(QWidget):
+    run_requested = Signal(dict)
+    
+    def __init__(self, app_state, parent=None):
+        super().__init__(parent)
+        self.app_state = app_state
+        self.pos_files = []
+        self.db_path = ""
+        
+        main_layout = QVBoxLayout(self)
+        
+        # View Title
+        title_lbl = QLabel("周期经营同比与环比分析", self)
+        title_lbl.setObjectName("view_title")
+        main_layout.addWidget(title_lbl)
+        
+        # Drop Zone
+        self.drop_zone = DropZone("拖拽 本期 POS 订单 Excel 和 数据库到此处", self)
+        self.drop_zone.files_dropped.connect(self.handle_files_dropped)
+        main_layout.addWidget(self.drop_zone)
+        
+        # Selected File List
+        self.file_list = FileListWidget(filter_exts=['.xlsx', '.xls', '.db', '.sqlite'], parent=self)
+        self.file_list.files_updated.connect(self.handle_files_updated)
+        main_layout.addWidget(self.file_list)
+        
+        # Parameters Card
+        param_card = QWidget(self)
+        param_card.setObjectName("param_card")
+        param_card.setStyleSheet("background-color: #1e1e1e; border: 1px solid #2d2d2d; border-radius: 4px; padding: 8px;")
+        param_layout = QGridLayout(param_card)
+        
+        # SQLite Database Path
+        param_layout.addWidget(QLabel("SQLite 数据库路径:", param_card), 0, 0)
+        self.db_path_edit = QLineEdit(param_card)
+        default_db = self.app_state.get("default_db_path")
+        if not default_db:
+            default_db = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "长期订单分析", "output", "长期订单分析.db"))
+        self.db_path_edit.setText(default_db)
+        self.db_path_edit.textChanged.connect(self.save_preferences)
+        param_layout.addWidget(self.db_path_edit, 0, 1)
+        
+        self.db_browse_btn = QPushButton("📁 选择数据库", param_card)
+        self.db_browse_btn.clicked.connect(self.choose_db_file)
+        param_layout.addWidget(self.db_browse_btn, 0, 2)
+        
+        # Store Preference
+        param_layout.addWidget(QLabel("选择门店:", param_card), 1, 0)
+        self.store_combo = QComboBox(param_card)
+        self.store_combo.addItems(["自动推断", "万荷店", "保利店", "湾里店"])
+        self.store_combo.setCurrentText(self.app_state.get("recent_store", "万荷店"))
+        self.store_combo.currentTextChanged.connect(self.save_preferences)
+        param_layout.addWidget(self.store_combo, 1, 1)
+        
+        # Mode selector
+        param_layout.addWidget(QLabel("周期对比模式:", param_card), 1, 2)
+        self.mode_combo = QComboBox(param_card)
+        self.mode_combo.addItems(["week", "month"])
+        self.mode_combo.setCurrentText(self.app_state.get("recent_period_mode", "week"))
+        self.mode_combo.currentTextChanged.connect(self.save_preferences)
+        param_layout.addWidget(self.mode_combo, 1, 3)
+        
+        # Output Dir
+        param_layout.addWidget(QLabel("输出目录:", param_card), 2, 0)
+        self.output_dir_edit = QLineEdit(param_card)
+        default_out = self.app_state.get("default_output_dir")
+        if not default_out:
+            default_out = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "周期对比分析", "output"))
+        self.output_dir_edit.setText(default_out)
+        self.output_dir_edit.textChanged.connect(self.save_preferences)
+        param_layout.addWidget(self.output_dir_edit, 2, 1)
+        
+        self.out_browse_btn = QPushButton("📁 浏览目录", param_card)
+        self.out_browse_btn.clicked.connect(self.choose_output_dir)
+        param_layout.addWidget(self.out_browse_btn, 2, 2)
+        
+        main_layout.addWidget(param_card)
+        
+        # Validation Panel
+        self.val_panel = ValidationPanel(self)
+        main_layout.addWidget(self.val_panel)
+        
+        # Run Controls Layout
+        controls_layout = QHBoxLayout()
+        self.run_btn = QPushButton("▶️ 生成周期对比报告 (PDF+Word)", self)
+        self.run_btn.setObjectName("run_btn")
+        self.run_btn.clicked.connect(self.trigger_run)
+        controls_layout.addWidget(self.run_btn)
+        
+        self.open_output_btn = QPushButton("📂 打开输出目录", self)
+        self.open_output_btn.clicked.connect(self.open_output_dir)
+        controls_layout.addWidget(self.open_output_btn)
+        
+        controls_layout.addStretch()
+        main_layout.addLayout(controls_layout)
+        
+        # Log Panel
+        self.log_panel = LogPanel(self)
+        main_layout.addWidget(self.log_panel)
+        
+        self.run_validation()
+
+    def handle_files_dropped(self, paths):
+        scanned = scan_files(paths)
+        self.file_list.add_files(scanned)
+
+    def handle_files_updated(self, paths):
+        classified = classify_files(paths)
+        self.pos_files = classified.get("pos_excel", [])
+        
+        dbs = classified.get("database", [])
+        if dbs:
+            self.db_path_edit.setText(dbs[0])
+            
+        self.run_validation()
+
+    def run_validation(self):
+        self.db_path = self.db_path_edit.text().strip()
+        mode = self.mode_combo.currentText()
+        output_dir = self.output_dir_edit.text().strip()
+        
+        is_valid, messages = validate_period_compare(self.pos_files, self.db_path, mode, output_dir)
+        
+        self.val_panel.set_messages(messages)
+        self.run_btn.setEnabled(is_valid)
+
+    def choose_db_file(self):
+        file_path, _ = QFileDialog.getOpenFileName(self, "选择 SQLite 数据库文件", self.db_path_edit.text(), "SQLite Databases (*.db *.sqlite)")
+        if file_path:
+            self.db_path_edit.setText(file_path)
+            self.run_validation()
+
+    def choose_output_dir(self):
+        dir_path = QFileDialog.getExistingDirectory(self, "选择输出目录", self.output_dir_edit.text())
+        if dir_path:
+            self.output_dir_edit.setText(dir_path)
+            self.run_validation()
+
+    def open_output_dir(self):
+        out_dir = self.output_dir_edit.text().strip()
+        if os.path.exists(out_dir):
+            os.system(f'open "{out_dir}"')
+
+    def save_preferences(self):
+        self.app_state.set("default_db_path", self.db_path_edit.text().strip())
+        self.app_state.set("default_output_dir", self.output_dir_edit.text().strip())
+        self.app_state.set("recent_store", self.store_combo.currentText())
+        self.app_state.set("recent_period_mode", self.mode_combo.currentText())
+        self.run_validation()
+
+    def trigger_run(self):
+        store = self.store_combo.currentText()
+        if store == "自动推断":
+            store = None
+            
+        spec = {
+            "feature": "period_compare",
+            "inputs": {
+                "pos_files": self.pos_files,
+                "db_path": self.db_path
+            },
+            "params": {
+                "store": store,
+                "mode": self.mode_combo.currentText(),
+                "output_dir": self.output_dir_edit.text().strip()
+            }
+        }
+        self.run_requested.emit(spec)

@@ -102,7 +102,7 @@ python3 main.py \
 ### 安装依赖
 
 ```bash
-pip install pandas openpyxl reportlab
+pip install pandas openpyxl reportlab python-docx
 ```
 
 ## 核心架构
@@ -125,9 +125,35 @@ main.py (长期订单分析)
   ├── multi_file_loader.py → 多文件加载去重
   ├── daily_stats.py → 每日统计计算
   └── excel_writer.py → 4-Sheet Excel 输出
+
+main.py (周期对比分析)
+  ├── 通过 sys.path 引入 ../每日订单分析/order_merger_skill
+  ├── db_manager.py（复用长期订单分析的） → 历史数据读取
+  ├── period_validator.py → 周/月周期完整性校验
+  ├── comparator.py → 环比/同比计算
+  ├── pdf_report.py → PDF 报告
+  └── word_report.py → Word 报告
 ```
 
 **关键约束**：`merge_order_zhuofang.py` 通过相对路径 `../每日订单分析/order_merger_skill` 导入，不通过 pip install。目录结构必须保持不变。
+
+### SQLite 数据库结构
+
+长期订单分析和周期对比分析共用 SQLite 数据库，由 `长期订单分析/db_manager.py` 的 `DatabaseManager` 类创建和维护。共 7 张表：
+
+| 表名 | 用途 | 去重键 |
+|------|------|--------|
+| `orders` | 原始订单（整行 JSON 序列化存储） | `订单号` PRIMARY KEY |
+| `items` | 商品明细（整行 JSON 序列化存储） | UNIQUE INDEX `(订单号, 商品编码, 商品名称)` |
+| `groups` | 消费团体聚合结果 | UNIQUE `(group_date, first_order_id, table_name)` |
+| `daily_overview` | 每日经营数据总览（整体/分区/午晚市/会员） | PRIMARY KEY `(date, category, sub_category)` |
+| `daily_order_counts` | 每日订单数量明细（pipeline 各阶段计数） | `date` PRIMARY KEY |
+| `daily_buckets` | 每日客单价区间分布（5档） | PRIMARY KEY `(date, bucket)` |
+| `daily_opener_stats` | 每日开单人统计 | PRIMARY KEY `(date, opener_name)` |
+
+`items` 表用 `(订单号, 商品编码, 商品名称)` 复合唯一索引而非对 JSON 字段去重，原因是早期直接对 `原始数据` JSON 字符串做 UNIQUE 约束时，dict 序列化顺序不稳定导致同一条记录被重复插入。
+
+所有 daily_* 表通过 `INSERT OR REPLACE` 写入，支持重复运行自动覆盖更新。
 
 ### 数据 Pipeline 流程（merge_order_zhuofang.py）
 
@@ -170,10 +196,34 @@ main.py (长期订单分析)
 - **桌访 CSV**：编码 UTF-8-SIG/GBK 等自动检测，文件名格式 `桌探数据_1.5版_N条_YYYY-M-D.csv`
 - 详细字段定义见 PRD.md 第四章
 
+## 门店差异化参数
+
+万荷店与保利店在多个维度有不同参数。修改时注意两个门店都要覆盖。
+
+| 参数 | 万荷店 | 保利店 |
+|------|--------|--------|
+| 异常检测人均阈值（规则2a/2b/2c） | ¥10 / ¥20 / ¥30 | 统一 ¥15 |
+| 订单索引红色预警线 | 人均 < ¥100 | 人均 < ¥40 |
+| 重点菜品数量 | 14 道 | 2 道 |
+| 重点菜品列表 | 富顺鸡丝凉面、古法干烧鱼（江团+鲈鱼合并）、富顺荤豆花、206省道半汤牛蛙、酸菜煸炒土豆片、香菜回锅茄子、火爆腰花、炝炒莲花白菜、金阳青花椒辣子鸡、鱼香梅花肉丝、文庙担担面、茂萱婆婆芽菜包、五指毛桃白芸豆猪肚三年老鸡汤(盅) | 川南鱼香肉丝（不能免葱）、香菜回锅茄子 |
+| 桌台分类关键词 | 包间 / 大厅 / 户外 | 包房 / 沙发 / 户外 |
+| PDF 第六章 | 重点菜品销售统计 | 重点菜品销售统计（仅2道） |
+| PDF 第七章 | 重点新品销售统计 | 午晚热销统计（午市/晚市各 Top 6） |
+
+万荷店 14 道重点菜完整列表见 `周期对比分析/comparator.py:296-300`。
+
 ## 重要修改注意事项
 
 - 所有可调参数在 `order_merger_skill/config.py`，不要在业务逻辑中硬编码阈值
 - 修改合并算法前先读 `每日订单分析/订单合并逻辑优化_*.plan.md` 了解历史设计决策
 - PRD.md 是规范文档，算法变更后需同步更新 PRD
-- 改 `order_merger_skill` 会影响两个工具（主工具和纯订单分析工具）
-- 商品名称含全角/半角括号差异，匹配时需统一规范化处理
+- 改 `order_merger_skill` 会影响全部三个工具
+- `_area()` 分类规则：包间/包房→包间，大厅/沙发→大厅，户外→户外，其余→其他。如果出现"其他"分类，说明 POS 数据中出现了未预期的桌台命名
+- `merge_order_zhuofang.py` 中 `_validate_closure()` 校验区域/午晚市/会员三个维度的营业额之和是否等于整体营业额，不一致时在报告中打印告警
+- 商品名称含全角/半角括号差异，匹配时需统一规范化处理（`replace('（', '(').replace('）', ')')`）
+
+### 酒水饮料归组
+
+周期对比分析的"酒水饮料甜品销售排行"中，`_base_name()` 去掉末尾括号内的规格描述（杯/小瓶/大瓶/扎/壶/盅等），同名商品归组显示。例如「凤梨洛神花果茶(杯)」「凤梨洛神花果茶(大瓶)」归为一组。
+
+筛选范围由 `comparator.py` 中 `DRINK_DESSERT_CATS` 定义（饮料和水果、调饮汁、甜品、啤酒、葡萄酒、茶、咖啡、冰淇淋、鸡尾酒等），且排除 `菜品收入 <= 0` 的商品（有销量但金额为 0 的免单/测试商品）。
