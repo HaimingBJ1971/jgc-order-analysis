@@ -18,19 +18,53 @@ from item_report_helpers import iter_subsections_for_report
 # 注册中文字体（复用现有的字体注册逻辑）
 def register_chinese_font():
     """注册系统中的中文字体"""
-    font_paths = [
+    import sys
+    import os
+    font_paths = []
+    
+    # 1. macOS Paths
+    font_paths.extend([
         ('/System/Library/Fonts/STHeiti Light.ttc', 0),
         ('/System/Library/Fonts/STHeiti Medium.ttc', 0),
         ('/System/Library/Fonts/PingFang.ttc', 0),
         ('/System/Library/Fonts/STHeiti Light.ttc', 1),
         ('/System/Library/Fonts/STHeiti Medium.ttc', 1)
-    ]
+    ])
+    
+    # 2. Windows Paths
+    if sys.platform.startswith('win'):
+        windir = os.environ.get('WINDIR', 'C:\\Windows')
+        font_paths.extend([
+            (os.path.join(windir, 'Fonts', 'msyh.ttc'), 0),      # Microsoft YaHei
+            (os.path.join(windir, 'Fonts', 'msyhbd.ttc'), 0),    # Microsoft YaHei Bold
+            (os.path.join(windir, 'Fonts', 'simsun.ttc'), 0),    # SimSun
+            (os.path.join(windir, 'Fonts', 'simhei.ttf'), None), # SimHei
+        ])
+    else:
+        font_paths.extend([
+            ('C:\\Windows\\Fonts\\msyh.ttc', 0),
+            ('C:\\Windows\\Fonts\\simsun.ttc', 0),
+            ('C:\\Windows\\Fonts\\simhei.ttf', None),
+        ])
+        
+    # 3. Linux Paths
+    font_paths.extend([
+        ('/usr/share/fonts/truetype/wqy/wqy-microhei.ttc', 0),
+        ('/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc', 0),
+        ('/usr/share/fonts/fonts-go/Go-Medium.ttf', None),
+        ('/usr/share/fonts/truetype/droid/DroidSansFallback.ttf', None),
+        ('/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc', 0),
+        ('/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc', 0),
+        ('/usr/share/fonts/wqy-microhei/wqy-microhei.ttc', 0),
+    ])
     
     font_registered = False
     for font_path, subfont_index in font_paths:
+        if not os.path.exists(font_path):
+            continue
         try:
-            font_name = f'ChineseFont_{subfont_index}'
-            if 'ttc' in font_path.lower():
+            font_name = f'ChineseFont_{subfont_index}' if subfont_index is not None else 'ChineseFont'
+            if 'ttc' in font_path.lower() and subfont_index is not None:
                 pdfmetrics.registerFont(TTFont(font_name, font_path, subfontIndex=subfont_index))
             else:
                 pdfmetrics.registerFont(TTFont(font_name, font_path))

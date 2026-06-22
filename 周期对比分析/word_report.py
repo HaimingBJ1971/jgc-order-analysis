@@ -85,6 +85,17 @@ def _change_str(val, is_neg):
         return (val, GREEN)
 
 
+def _qty_change(cur, base):
+    """Return ((diff_text, color), (pct_text, color)) for quantity comparisons."""
+    if base and base > 0:
+        diff = cur - base
+        rate = round(diff / base * 100, 1)
+        return (
+            _change_str(f'{diff:+d}', diff < 0),
+            _change_str(f'{rate:+.1f}%', diff < 0),
+        )
+    return ('-', None), ('-', None)
+
 def generate_comparison_word(output_path, period_info, comparison_info, comp_data, mode, store_name):
     doc = Document()
 
@@ -133,13 +144,8 @@ def generate_comparison_word(output_path, period_info, comparison_info, comp_dat
             cat_name = info.get('cat', '') if isinstance(info, dict) else ''
             ring_qty = drinks_ring.get(name)
             tong_qty = drinks_tong.get(name)
-            def _chg(cur, base):
-                if base and base > 0:
-                    d = cur - base; r = round(d / base * 100, 1)
-                    return _change_str(f'{d:+d}', d < 0), _change_str(f'{r:+.1f}%', d < 0)
-                return ('-', None), ('-', None)
-            rd, rr = _chg(qty, ring_qty)
-            td, tr = _chg(qty, tong_qty)
+            rd, rr = _qty_change(qty, ring_qty)
+            td, tr = _qty_change(qty, tong_qty)
             d_rows.append([
                 (cat_name, None), (name, None), (str(qty), None),
                 (str(ring_qty) if ring_qty else '-', None), rd, rr,
@@ -158,7 +164,7 @@ def generate_comparison_word(output_path, period_info, comparison_info, comp_dat
     dish_rows = []
     for name, qty in cur_dishes:
         rq = ring_d_dict.get(name); tq = tong_d_dict.get(name)
-        rd, rr = _chg(qty, rq); td, tr = _chg(qty, tq)
+        rd, rr = _qty_change(qty, rq); td, tr = _qty_change(qty, tq)
         dish_rows.append([
             (name, None), (str(qty), None),
             (str(rq) if rq else '-', None), rd, rr,
@@ -167,14 +173,18 @@ def generate_comparison_word(output_path, period_info, comparison_info, comp_dat
     _add_table(doc, dish_headers, dish_rows)
 
     # ── Section 4: Categories ──
-    _add_heading(doc, '四、商品中类销售额分布', level=1)
+    cat_dim = comp_data.get('category_dimension') or {}
+    section_title = cat_dim.get('title', '四、商品中类销售额分布')
+    col_label = cat_dim.get('column', '商品中类')
+    cat_field = cat_dim.get('field', '商品中类')
+    _add_heading(doc, section_title, level=1)
     cats_cur_list = comp_data.get('cats_current', [])
     cats_ring = dict(comp_data.get('cats_ringbi', []))
     cats_tong = dict(comp_data.get('cats_tongbi', []))
     if cats_cur_list:
         cur_total = sum(v for _, v in cats_cur_list)
         # ring_total computed on the fly for rate
-        cat_headers = ['商品中类', '本期金额', '本期占比', '环比变化', '环比变化率', '同比变化', '同比变化率']
+        cat_headers = [col_label, '本期金额', '本期占比', '环比变化', '环比变化率', '同比变化', '同比变化率']
         cat_rows = []
         for cat_name, rev in cats_cur_list:
             ring_rev = cats_ring.get(cat_name)
@@ -211,6 +221,11 @@ def generate_comparison_word(output_path, period_info, comparison_info, comp_dat
             ])
         _add_table(doc, cat_headers, cat_rows)
         _add_para(doc, '注：以上为包含自取外卖订单和吧台及零食购买团体的商品销售额，合计大于第一部分经营数据中的营业额。第三方平台外卖单并未记入。', size=7, color=RGBColor(0x66, 0x66, 0x66))
+        uncat = comp_data.get('uncategorized_products') or []
+        if uncat:
+            from comparator import format_uncategorized_note
+            for line in format_uncategorized_note(uncat, cat_field).split('\n'):
+                _add_para(doc, line, size=6, color=RGBColor(0x66, 0x66, 0x66))
     else:
         _add_para(doc, '（无数据）')
 

@@ -29,15 +29,14 @@ def parse_metadata(df_raw):
 
 def clean_store_name(raw_store, file_path=None, force_store=None):
     """
-    Deduce store name: force_store > raw_store > filename
+    Deduce store name: force_store > Excel metadata raw_store (never filename).
     Standardize to '万荷店', '保利店', '湾里店'
     """
+    _ = file_path  # kept for call-site compatibility
     if force_store:
         name = force_store
     elif raw_store:
         name = raw_store
-    elif file_path:
-        name = os.path.basename(file_path)
     else:
         name = "未知门店"
         
@@ -117,6 +116,11 @@ def load_takeaway_excel(file_path, force_store=None):
             data.loc[mask_null, "营业日"] = data.loc[mask_null, "下单时间"].dt.strftime('%Y-%m-%d')
     else:
         data["营业日"] = data["下单时间"].dt.strftime('%Y-%m-%d')
+        
+    # Clean rows with missing/invalid business dates (e.g. NaN or NaT) to prevent DB pollution
+    if "营业日" in data.columns:
+        data = data.dropna(subset=["营业日"]).copy()
+        data = data[data["营业日"].astype(str).str.lower().str.strip().apply(lambda x: x not in ('nat', 'nan', 'none', ''))].copy()
         
     # Mask/remove privacy columns
     privacy_cols = ['收货人姓名', '收货人手机号', '送餐地址']

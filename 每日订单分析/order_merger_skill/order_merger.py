@@ -20,6 +20,7 @@ from config import (
     T_WINDOW_HOURS_PRIVATE,
     CONCURRENT_MINUTES,
     ADD_ON_MAX_RATIO,
+    ANCHOR_MIN_AMOUNT,
     T_REOPEN_MIN_REGULAR,
     T_REOPEN_MIN_PRIVATE,
     SETTLE_GRACE_MIN,
@@ -254,9 +255,10 @@ def merge_orders(orders_df, item_sets, line_cnts, items_df=None):
                 and _is_beverage_only_order(order_id, items_df)
             )
 
-            # ── R2: 加单金额上限（> 锚点 × 50% → 新会话） ──
+            # ── R2: 加单金额上限（> 锚点 × 50% 且 锚点单自身不是极小金额订单 → 新会话） ──
             if (
                 not private_dinner_drink_addon
+                and anchor["订单收入"] > ANCHOR_MIN_AMOUNT
                 and row["订单收入"] > anchor["订单收入"] * ADD_ON_MAX_RATIO
             ):
                 _start_new_group(

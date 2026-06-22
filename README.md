@@ -1,6 +1,6 @@
 # 金谷仓餐厅订单与桌访合并分析系统
 
-金谷仓餐厅（万荷店、保利店、湾里店）日常经营数据分析系统，包含三大工具：订单+桌访合并分析、长期订单分析、周期对比分析。
+金谷仓餐厅（万荷店、保利店、湾里店）日常经营数据分析系统：订单桌访合并、长期入库、周期对比、平台外卖统计，以及按需的桌访语料转换与万荷饮品酒水统计。
 
 ## 背景
 
@@ -40,14 +40,9 @@ POS 系统同一桌客人多次扫码产生多笔独立订单，合并后才能�
 │   ├── pdf_report.py                    #     PDF 输出
 │   ├── word_report.py                   #     Word 输出
 │   └── requirements.txt                 #     pandas, openpyxl, reportlab, python-docx
-└── 平台外卖统计/                          # ★ 新增：平台外卖数据统计分析
-    ├── main.py                          #     CLI 入口，完整 pipeline
-    ├── takeaway_loader.py               #     外卖 Excel 加载、清洗、脱敏
-    ├── takeaway_stats.py                #     多维外卖经营数据聚合
-    ├── excel_writer.py                  #     8-Sheet Excel 输出
-    ├── pdf_report.py                    #     A4 中文摘要 PDF 报告
-    ├── db_manager.py                    #     SQLite 增量归档存储
-    └── requirements.txt                 #     pandas, openpyxl, reportlab
+├── 平台外卖统计/                          #   平台外卖数据统计分析
+├── 饮品订单统计/                          #   万荷饮品/酒水中类 PDF（手工按需）
+└── 桌访语料转换/                          #   桌访 CSV → 语料桌访 xlsx
 ```
 
 ## 快速开始
@@ -120,6 +115,25 @@ python3 main.py \
 - `平台外卖统计_YYYYMMDD_YYYYMMDD.pdf` — 中文 A4 外卖摘要 PDF 报告
 - `平台外卖统计_YYYYMMDD_YYYYMMDD.md` — 易于复制的 Markdown 简报
 - 数据库增量归档 — 订单数据自动脱敏写入 SQLite `takeaway_*` 系列表
+
+### 饮品/酒水订单统计（万荷，按需手工）
+
+```bash
+四维度自动评审/.venv/bin/python 订单与桌访合并/饮品订单统计/generate_drink_order_stats_pdf.py \
+  --excel "path/店内订单明细...万荷.xlsx" \
+  --output "path/万荷饮品酒水订单统计_YYYYMMDD_YYYYMMDD.pdf"
+```
+
+A4 纵置 PDF；九类商品中类；统计口径与订单桌访合并一致（消费团体数）。详见 `饮品订单统计/README.md`。
+
+### 桌访语料转换（四维度心理学奖）
+
+```bash
+cd 桌访语料转换
+python3 convert_corpus.py "/path/to/桌访数据_...csv"
+```
+
+输出 `语料桌访_1.5版_*.xlsx`。详见 `桌访语料转换/README.md`。
 
 ### GUI 控制台 (统一图形化操作界面)
 

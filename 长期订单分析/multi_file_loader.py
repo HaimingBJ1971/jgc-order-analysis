@@ -58,7 +58,8 @@ def load_and_dedup_excels(file_paths: list, existing_order_ids: set = None):
             print(f"  [错误] 无法加载文件 {fname}: {e}")
             continue
 
-        # ── Extract pre-clean daily counts from THIS file ──
+        orders_raw = orders_raw.copy()
+        orders_raw["source_file"] = fname
         if '下单时间' in orders_raw.columns:
             orders_raw['_date'] = pd.to_datetime(
                 orders_raw['下单时间'], errors='coerce'

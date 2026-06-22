@@ -10,6 +10,95 @@ Computes comparisons across 3 dimensions:
 import json
 from datetime import datetime, timedelta
 
+# POS 导出中常见的中类占位符（并非真实分类名）
+_INVALID_CATEGORY_TOKENS = frozenset({
+    '', '-', '—', '－', '–', '无', '未知', 'nan', 'none', 'null',
+})
+
+
+def category_field_for_store(store_name: str | None) -> str:
+    """保利店 POS 未维护中类，第四节改用商品大类对比。"""
+    if store_name and '保利' in str(store_name):
+        return '商品大类'
+    return '商品中类'
+
+
+def category_section_meta(store_name: str | None) -> dict:
+    field = category_field_for_store(store_name)
+    if field == '商品大类':
+        return {
+            'field': field,
+            'column': '商品大类',
+            'title': '四、商品大类销售额分布',
+        }
+    return {
+        'field': field,
+        'column': '商品中类',
+        'title': '四、商品中类销售额分布',
+    }
+
+
+def _normalize_category(raw) -> str | None:
+    """Normalize category label; return None if row should be skipped entirely."""
+    cat = str(raw or '').strip()
+    if cat.lower() in _INVALID_CATEGORY_TOKENS or cat in _INVALID_CATEGORY_TOKENS:
+        return '未分类'
+    return cat
+
+
+def _is_uncategorized_raw(raw) -> bool:
+    """True when POS category field is a placeholder / missing."""
+    cat = str(raw or '').strip()
+    return cat.lower() in _INVALID_CATEGORY_TOKENS or cat in _INVALID_CATEGORY_TOKENS
+
+
+def _calc_uncategorized_products(items_data, category_field: str = '商品中类'):
+    """Aggregate products with missing POS category in the given field."""
+    agg = {}
+    seen = set()
+    for item_row in items_data:
+        try:
+            data = json.loads(item_row[1])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not _is_uncategorized_raw(data.get(category_field, '')):
+            continue
+        oid = str(data.get('订单号', ''))
+        code = str(data.get('商品编码', ''))
+        name = str(data.get('商品名称', '')).strip()
+        if not name or name in ('nan', 'None'):
+            continue
+        key = (oid, code, name)
+        if key in seen:
+            continue
+        seen.add(key)
+        qty = int(float(data.get('数量', 0) or 0))
+        rev = float(data.get('菜品收入', 0) or 0)
+        if rev <= 0:
+            continue
+        bucket = agg.setdefault(name, {'qty': 0, 'rev': 0.0})
+        bucket['qty'] += qty
+        bucket['rev'] += rev
+    return sorted(
+        ((name, v['qty'], v['rev']) for name, v in agg.items()),
+        key=lambda x: x[2],
+        reverse=True,
+    )
+
+
+def format_uncategorized_note(products: list, category_field: str = '商品中类') -> str:
+    """Plain-text footnote listing all uncategorized products for reports."""
+    if not products:
+        return ''
+    total_rev = sum(rev for _, _, rev in products)
+    lines = [
+        f"未分类商品明细（POS {category_field}为「-」或空，请在后台补全）："
+        f"共 {len(products)} 项，合计 ¥{total_rev:,.0f}",
+    ]
+    for i, (name, qty, rev) in enumerate(products, 1):
+        lines.append(f"{i}. {name}（{qty}份，¥{rev:,.0f}）")
+    return '\n'.join(lines)
+
 
 def _fmt_currency(val):
     return f"¥{val:,.0f}"
@@ -24,7 +113,7 @@ def _fmt_pct(val):
 def _fmt_change(cur, base):
     """Format change: absolute value and percentage, or '-' if base is missing."""
     if base is None or base == 0:
-        return _fmt_currency(cur), '-'
+        return '-', '-'
     diff = cur - base
     pct = diff / base * 100
     return f"{diff:+,.0f}", f"{pct:+.1f}%"
@@ -106,8 +195,8 @@ def _calc_dish_rankings(items_data, target_dishes):
     return sorted(dish_qty.items(), key=lambda x: x[1], reverse=True)
 
 
-def _calc_category_distribution(items_data):
-    """Calculate revenue distribution by 商品中类. Deduplicates by (订单号, 商品编码, 商品名称)."""
+def _calc_category_distribution(items_data, category_field: str = '商品中类'):
+    """Calculate revenue distribution by category field. Deduplicates by (订单号, 商品编码, 商品名称)."""
     cat_rev = {}
     seen = set()
     for item_row in items_data:
@@ -122,8 +211,8 @@ def _calc_category_distribution(items_data):
         if key in seen:
             continue
         seen.add(key)
-        cat = str(data.get('商品中类', '')).strip()
-        if not cat or cat in ('nan', 'None', ''):
+        cat = _normalize_category(data.get(category_field, ''))
+        if cat is None:
             continue
         rev = float(data.get('菜品收入', 0) or 0)
         cat_rev[cat] = cat_rev.get(cat, 0) + rev
@@ -218,6 +307,8 @@ def compute_comparison(db_manager, period_info, comparison_info, mode, store_nam
         'buckets_ringbi': {},
         'buckets_tongbi': {},
         'data_quality': {'ringbi_missing': False, 'tongbi_missing': False},
+        'uncategorized_products': [],
+        'category_dimension': category_section_meta(store_name),
     }
 
     current_start = period_info['period_start']
@@ -231,13 +322,17 @@ def compute_comparison(db_manager, period_info, comparison_info, mode, store_nam
     ]
 
     current_overview = _aggr_daily_overview(
-        db_manager.get_overview_for_period(current_start, current_end), overview_cats
+        db_manager.get_overview_for_period(current_start, current_end, store_name), overview_cats
     )
     ringbi_overview = _aggr_daily_overview(
-        db_manager.get_overview_for_period(comparison_info['ringbi_start'], comparison_info['ringbi_end']), overview_cats
+        db_manager.get_overview_for_period(
+            comparison_info['ringbi_start'], comparison_info['ringbi_end'], store_name
+        ), overview_cats
     )
     tongbi_overview = _aggr_daily_overview(
-        db_manager.get_overview_for_period(comparison_info['tongbi_start'], comparison_info['tongbi_end']), overview_cats
+        db_manager.get_overview_for_period(
+            comparison_info['tongbi_start'], comparison_info['tongbi_end'], store_name
+        ), overview_cats
     )
 
     result['data_quality']['ringbi_missing'] = len(ringbi_overview) == 0
@@ -286,7 +381,6 @@ def compute_comparison(db_manager, period_info, comparison_info, mode, store_nam
     # ── 2. Dish rankings ──
     # Determine target dishes based on store
     if '保利' in str(store_name):
-        from order_merger_skill import config
         target_dishes = [
             "川南鱼香肉丝（不能免葱）",
             "香菜回锅茄子",
@@ -299,9 +393,13 @@ def compute_comparison(db_manager, period_info, comparison_info, mode, store_nam
             "茂萱婆婆芽菜包", "五指毛桃白芸豆猪肚三年老鸡汤(盅)",
         ]
 
-    items_current = db_manager.get_items_for_period(current_start, current_end)
-    items_ringbi = db_manager.get_items_for_period(comparison_info['ringbi_start'], comparison_info['ringbi_end'])
-    items_tongbi = db_manager.get_items_for_period(comparison_info['tongbi_start'], comparison_info['tongbi_end'])
+    items_current = db_manager.get_items_for_period(current_start, current_end, store_name)
+    items_ringbi = db_manager.get_items_for_period(
+        comparison_info['ringbi_start'], comparison_info['ringbi_end'], store_name
+    )
+    items_tongbi = db_manager.get_items_for_period(
+        comparison_info['tongbi_start'], comparison_info['tongbi_end'], store_name
+    )
 
     result['dishes_current'] = _calc_dish_rankings(items_current, target_dishes)
     result['dishes_ringbi'] = _calc_dish_rankings(items_ringbi, target_dishes)
@@ -312,20 +410,26 @@ def compute_comparison(db_manager, period_info, comparison_info, mode, store_nam
     result['drinks_ringbi'] = _calc_drink_dessert_rankings(items_ringbi)
     result['drinks_tongbi'] = _calc_drink_dessert_rankings(items_tongbi)
 
-    # Category distribution
-    result['cats_current'] = _calc_category_distribution(items_current)
-    result['cats_ringbi'] = _calc_category_distribution(items_ringbi)
-    result['cats_tongbi'] = _calc_category_distribution(items_tongbi)
+    # Category distribution (保利店用商品大类，万荷店用商品中类)
+    cat_field = category_field_for_store(store_name)
+    result['cats_current'] = _calc_category_distribution(items_current, cat_field)
+    result['cats_ringbi'] = _calc_category_distribution(items_ringbi, cat_field)
+    result['cats_tongbi'] = _calc_category_distribution(items_tongbi, cat_field)
+    result['uncategorized_products'] = _calc_uncategorized_products(items_current, cat_field)
 
     # ── 3. Spending buckets ──
     result['buckets_current'] = _aggr_daily_buckets(
-        db_manager.get_buckets_for_period(current_start, current_end)
+        db_manager.get_buckets_for_period(current_start, current_end, store_name)
     )
     result['buckets_ringbi'] = _aggr_daily_buckets(
-        db_manager.get_buckets_for_period(comparison_info['ringbi_start'], comparison_info['ringbi_end'])
+        db_manager.get_buckets_for_period(
+            comparison_info['ringbi_start'], comparison_info['ringbi_end'], store_name
+        )
     )
     result['buckets_tongbi'] = _aggr_daily_buckets(
-        db_manager.get_buckets_for_period(comparison_info['tongbi_start'], comparison_info['tongbi_end'])
+        db_manager.get_buckets_for_period(
+            comparison_info['tongbi_start'], comparison_info['tongbi_end'], store_name
+        )
     )
 
     return result

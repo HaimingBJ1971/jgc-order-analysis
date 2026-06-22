@@ -30,6 +30,7 @@ _lt_dir = os.path.join(os.path.dirname(__file__), '..', '长期订单分析')
 sys.path.insert(0, os.path.abspath(_lt_dir))
 
 from db_manager import DatabaseManager
+from store_utils import infer_order_store
 from daily_stats import compute_all_daily_stats, _area, _meal_period, _compute_member_status, _compute_opener
 
 from period_validator import validate_period, get_comparison_periods
@@ -152,12 +153,21 @@ def main():
     source_file = os.path.basename(args.excel)
     db.insert_orders(raw_orders, source_file)
     db.insert_items(raw_items, source_file)
+    if store_name:
+        order_ids = [
+            str(row["订单号"])
+            for _, row in raw_orders.iterrows()
+            if infer_order_store(row.to_dict(), source_file) == store_name
+        ]
+        db.relabel_order_sources(order_ids, source_file)
+        db.relabel_item_sources(order_ids, source_file)
     db.insert_groups(group_sum)
 
     # Compute and write daily stats (using tagged group_sum)
     stats_result = compute_all_daily_stats(
         group_sum, orders_with_group, pre_merge_daily,
-        items_clean if not items_clean.empty else None
+        items_clean if not items_clean.empty else None,
+        store_name=store_name,
     )
     if stats_result['overview_rows']:
         db.upsert_daily_overview(stats_result['overview_rows'])

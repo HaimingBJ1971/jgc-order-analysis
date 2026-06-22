@@ -12,6 +12,7 @@ class TakeawayDatabaseManager:
         os.makedirs(db_dir, exist_ok=True)
         
         self.conn = sqlite3.connect(db_path)
+        self.conn.execute("PRAGMA busy_timeout = 5000")
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=NORMAL")
         self._create_tables()

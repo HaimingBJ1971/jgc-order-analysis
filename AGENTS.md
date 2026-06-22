@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
 ## 项目概述
 
@@ -15,39 +15,19 @@ POS 系统同一桌客人多次扫码产生多笔独立订单，合并后才能�
 ├── PRD.md                            # 完整 PRD（v3.16），所有规则与参数定义
 ├── 订单桌访合并/                      # ★ 主工具：订单+桌访合并分析
 │   ├── merge_order_zhuofang.py       #   CLI 入口，完整 pipeline（唯一入口文件）
-│   ├── requirements.txt              #   pandas, openpyxl, reportlab
-│   ├── output/                       #   输出 PDF + MD
-│   ├── 店内订单明细_*.xlsx            #   输入：POS 订单
-│   └── 桌探数据_*.csv                #   输入：桌访反馈
+│   └── ...
 ├── 每日订单分析/
-│   ├── order_merger_skill/           # ★ 核心算法库（6个模块）
-│   │   ├── config.py                 #   所有可调参数
-│   │   ├── data_loader.py            #   Excel 加载与清洗
-│   │   ├── order_merger.py           #   核心合并算法（R0-R3.5 + 弱规则打分）
-│   │   ├── aggregator.py             #   聚合、过滤、统计
-│   │   ├── item_report_helpers.py    #   报告商品展示辅助
-│   │   ├── report_generator.py       #   MD 报告生成
-│   │   ├── pdf_generator.py          #   PDF「客单价重点订单分析」
-│   │   └── pdf_generator_complete.py #   PDF「全量订单列表」
-│   └── jin-gu-cang-order-analysis/   # 可独立部署的纯订单分析 Skill 外壳
-│       └── scripts/run_analysis.py   #   CLI 入口（纯订单，无桌访）
-├── 长期订单分析/                      # ★ 新增：跨日期长期订单趋势分析
-│   ├── main.py                       #   CLI 入口，完整 pipeline
-│   ├── db_manager.py                 #   SQLite 读写、增量检测
-│   ├── multi_file_loader.py          #   多文件加载与去重
-│   ├── daily_stats.py                #   每日统计计算（4个Sheet）
-│   ├── excel_writer.py               #   4-Sheet Excel 输出
-│   └── requirements.txt              #   pandas, openpyxl
-├── 周期对比分析/                      # ★ 新增：周期环比/同比对比分析
-│   ├── main.py                       #   CLI 入口，完整 pipeline
-│   ├── period_validator.py           #   周期完整性校验
-│   ├── comparator.py                 #   同比环比计算引擎
-│   ├── pdf_report.py                 #   PDF 对比报告生成
-│   ├── word_report.py                #   Word 对比报告生成
-│   └── requirements.txt              #   pandas, openpyxl, reportlab, python-docx
-├── 平台外卖统计/
-├── 饮品订单统计/                      #   万荷饮品 PDF（按需）
-└── 桌访语料转换/                      #   四维度语料前置
+│   └── order_merger_skill/           # ★ 核心算法库（合并、聚合、报告）
+├── 长期订单分析/                      # ★ 跨日期长期订单趋势 + SQLite 主库
+├── 周期对比分析/                      # ★ 周期环比/同比对比
+│   ├── main.py                       #   CLI 入口 + 报告
+│   └── ingest_store_stats.py         #   单店入库（不写报告）
+├── 平台外卖统计/                      # ★ 平台外卖订单统计分析
+├── 饮品订单统计/                      # ★ 万荷饮品/酒水中类占比 PDF（手工按需）
+│   └── generate_drink_order_stats_pdf.py
+├── 桌访语料转换/                      # ★ 桌访 CSV → 语料桌访 xlsx（四维度心理学奖）
+│   └── convert_corpus.py
+└── 桌探邮件下载/                      #   IMAP 拉取桌探日报 CSV
 ```
 
 ## 常用命令
@@ -100,7 +80,63 @@ python3 main.py \
 ```
 
 输出：`周期对比分析_YYYYMMDD_YYYYMMDD_门店.pdf` + `.docx`
-含五个章节：经营数据、酒水饮料甜品排行、重点菜品、商品中类销售额、客单价区间，环比/同比变化带颜色标注。
+含五个章节：经营数据、酒水饮料甜品排行、重点菜品、商品中类销售额、客单价区间，环比/同比变化带颜色标注。第四节表下备注会列出本期全部「未分类」商品（POS 中类为 `-` 或空），供后台补全。
+
+### 饮品/酒水订单统计（万荷，按需手工）
+
+```bash
+cd "/Users/jgc/Documents/每周:月工作"
+四维度自动评审/.venv/bin/python 订单与桌访合并/饮品订单统计/generate_drink_order_stats_pdf.py \
+  --excel "path/店内订单明细...万荷.xlsx" \
+  --output "path/万荷饮品酒水订单统计_YYYYMMDD_YYYYMMDD.pdf"
+```
+
+输出：A4 纵置 PDF。九类商品中类（非酒精 3 + 含酒精 6），团体数/人数/销量/点购率/收入占比。统计口径复用订单桌访合并 pipeline（消费团体，非 POS 原始单数）。**未纳入** `run_cycle.py`。
+
+详见 `饮品订单统计/README.md`。
+
+### 桌访语料转换（四维度心理学奖前置）
+
+```bash
+cd 桌访语料转换
+../../四维度自动评审/.venv/bin/python convert_corpus.py \
+  "/path/to/桌访数据_2026-06-08_至_2026-06-14_467条.csv"
+```
+
+输出：`语料桌访_1.5版_N条_YYYY-M-D.xlsx`，供四维度「心理学案例采纳奖」。详见 `桌访语料转换/README.md`。
+
+### 单店统计入库（历史包或指定日期段，不写报告）
+
+```bash
+cd 周期对比分析
+python3 ingest_store_stats.py \
+    --excel "万荷店内订单明细....xlsx" \
+    --store "万荷店" \
+    --db "../长期订单分析/output/长期订单分析.db"
+# 可选: --start 2025-06-09 --end 2025-06-15
+```
+
+### 数据库入库纪律（单店）
+
+- 周期对比、单店入库必须 `--store 万荷店|保利店`；`daily_overview` 等表按 `store_name` 读写，禁止两店 POS 合并后再做分店对比。
+- **判店以 POS 字段 `门店名称` 为准**（item 内），文件名仅作兜底；`relabel_*` 只更新与 `--store` 匹配的订单，避免跨店误标。
+- 若历史库存在万荷文件名下的保利订单，运行 `长期订单分析/fix_store_sources.py --db ...` 一次性纠正 `source_file`。
+- 两店历史入库完成后，运行 `长期订单分析/cleanup_db.py --db ...` 删除 `__legacy__` 汇总行与无效订单（`--dry-run` 可先预览）。
+- 外卖 Excel 以表头「门店名称」为准，不以文件名为准。
+- POS 占位中类 `-`/空 在报告中归并为 **未分类**，并在中类表下备注列出全部未分类商品名称。
+- **保利店**第四节改用 **商品大类** 同比/环比（POS 未维护中类）；万荷店仍用商品中类。
+
+### 保利店历史数据（已封存，2026-06-15 起）
+
+保利店历史 POS（2025-05-28 ~ 2026-06-14，含历史包 + 5/27~6/14 补充包）已入库。**默认禁止再次导入**历史包/补充包，除非改账、漏导或库损坏。日常每周只入库当周保利 POS。
+
+**已知缺口**：2026-02-15 ~ 2026-02-23（历史包无数据，疑春节歇业；若当时有营业需单独补导）。
+
+### 万荷店历史数据（已封存，2026-06-15 起）
+
+万荷店三包历史 POS（2023-10-08 ~ 2026-06-04）及第 23–24 周周 POS 已入库并完成单店打标。**默认禁止再次导入**，除非：POS 后台大规模改账、发现某段日期漏导、或数据库损坏重建。
+
+日常每周只需：当周万荷 POS + `ingest_store_stats` 或 `main.py --store 万荷店` 更新当周；**不要**重复跑三包历史 `ingest_store_stats`。
 
 ### 安装依赖
 
@@ -136,27 +172,13 @@ main.py (周期对比分析)
   ├── comparator.py → 环比/同比计算
   ├── pdf_report.py → PDF 报告
   └── word_report.py → Word 报告
+
+generate_drink_order_stats_pdf.py (饮品订单统计)
+  ├── merge_order_zhuofang.load_and_process_orders() → 消费团体口径
+  └── reportlab → A4 纵置 PDF
 ```
 
 **关键约束**：`merge_order_zhuofang.py` 通过相对路径 `../每日订单分析/order_merger_skill` 导入，不通过 pip install。目录结构必须保持不变。
-
-### SQLite 数据库结构
-
-长期订单分析和周期对比分析共用 SQLite 数据库，由 `长期订单分析/db_manager.py` 的 `DatabaseManager` 类创建和维护。共 7 张表：
-
-| 表名 | 用途 | 去重键 |
-|------|------|--------|
-| `orders` | 原始订单（整行 JSON 序列化存储） | `订单号` PRIMARY KEY |
-| `items` | 商品明细（整行 JSON 序列化存储） | UNIQUE INDEX `(订单号, 商品编码, 商品名称)` |
-| `groups` | 消费团体聚合结果 | UNIQUE `(group_date, first_order_id, table_name)` |
-| `daily_overview` | 每日经营数据总览（整体/分区/午晚市/会员） | PRIMARY KEY `(date, category, sub_category)` |
-| `daily_order_counts` | 每日订单数量明细（pipeline 各阶段计数） | `date` PRIMARY KEY |
-| `daily_buckets` | 每日客单价区间分布（5档） | PRIMARY KEY `(date, bucket)` |
-| `daily_opener_stats` | 每日开单人统计 | PRIMARY KEY `(date, opener_name)` |
-
-`items` 表用 `(订单号, 商品编码, 商品名称)` 复合唯一索引而非对 JSON 字段去重，原因是早期直接对 `原始数据` JSON 字符串做 UNIQUE 约束时，dict 序列化顺序不稳定导致同一条记录被重复插入。
-
-所有 daily_* 表通过 `INSERT OR REPLACE` 写入，支持重复运行自动覆盖更新。
 
 ### 数据 Pipeline 流程（merge_order_zhuofang.py）
 
@@ -174,7 +196,7 @@ main.py (周期对比分析)
 
 - **R0 并发拆单**：下单间隔 < 5分钟 → 直接合并
 - **R1 时间窗口**：距首单超时（普通2h/包间3h）→ 新开会话（小单例外）
-- **R2 加单金额上限**：候选收入 > 锚点 × 50% → 新开会话
+- **R2 加单金额上限**：候选收入 > 锚点 × 50% 且 锚点单自身 > 20 元时才触发拆分（防止 ¥5 水/湿巾等小开单误拆分） → 新开会话
 - **R3 结账后间隔**：距结账超时（普通30min/包间120min）→ 新开会话（小单例外）
 - **R3.5 包间晚餐纯酒水加单**：包间 + 17:00-23:00 + 全酒水 → 直接合并
 - **弱规则打分**：时间接近/手机号/人数/支付方式/Jaccard 商品相似度/小单加分等，≥60合并
@@ -199,34 +221,12 @@ main.py (周期对比分析)
 - **桌访 CSV**：编码 UTF-8-SIG/GBK 等自动检测，文件名格式 `桌探数据_1.5版_N条_YYYY-M-D.csv`
 - 详细字段定义见 PRD.md 第四章
 
-## 门店差异化参数
-
-万荷店与保利店在多个维度有不同参数。修改时注意两个门店都要覆盖。
-
-| 参数 | 万荷店 | 保利店 |
-|------|--------|--------|
-| 异常检测人均阈值（规则2a/2b/2c） | ¥10 / ¥20 / ¥30 | 统一 ¥15 |
-| 订单索引红色预警线 | 人均 < ¥100 | 人均 < ¥40 |
-| 重点菜品数量 | 14 道 | 2 道 |
-| 重点菜品列表 | 富顺鸡丝凉面、古法干烧鱼（江团+鲈鱼合并）、富顺荤豆花、206省道半汤牛蛙、酸菜煸炒土豆片、香菜回锅茄子、火爆腰花、炝炒莲花白菜、金阳青花椒辣子鸡、鱼香梅花肉丝、文庙担担面、茂萱婆婆芽菜包、五指毛桃白芸豆猪肚三年老鸡汤(盅) | 川南鱼香肉丝（不能免葱）、香菜回锅茄子 |
-| 桌台分类关键词 | 包间 / 大厅 / 户外 | 包房 / 沙发 / 户外 |
-| PDF 第六章 | 重点菜品销售统计 | 重点菜品销售统计（仅2道） |
-| PDF 第七章 | 重点新品销售统计 | 午晚热销统计（午市/晚市各 Top 6） |
-
-万荷店 14 道重点菜完整列表见 `周期对比分析/comparator.py:296-300`。
-
 ## 重要修改注意事项
 
 - 所有可调参数在 `order_merger_skill/config.py`，不要在业务逻辑中硬编码阈值
 - 修改合并算法前先读 `每日订单分析/订单合并逻辑优化_*.plan.md` 了解历史设计决策
 - PRD.md 是规范文档，算法变更后需同步更新 PRD
 - 改 `order_merger_skill` 会影响全部三个工具
-- `_area()` 分类规则：包间/包房→包间，大厅/沙发→大厅，户外→户外，其余→其他。如果出现"其他"分类，说明 POS 数据中出现了未预期的桌台命名
-- `merge_order_zhuofang.py` 中 `_validate_closure()` 校验区域/午晚市/会员三个维度的营业额之和是否等于整体营业额，不一致时在报告中打印告警
-- 商品名称含全角/半角括号差异，匹配时需统一规范化处理（`replace('（', '(').replace('）', ')')`）
-
-### 酒水饮料归组
-
-周期对比分析的"酒水饮料甜品销售排行"中，`_base_name()` 去掉末尾括号内的规格描述（杯/小瓶/大瓶/扎/壶/盅等），同名商品归组显示。例如「凤梨洛神花果茶(杯)」「凤梨洛神花果茶(大瓶)」归为一组。
-
-筛选范围由 `comparator.py` 中 `DRINK_DESSERT_CATS` 定义（饮料和水果、调饮汁、甜品、啤酒、葡萄酒、茶、咖啡、冰淇淋、鸡尾酒等），且排除 `菜品收入 <= 0` 的商品（有销量但金额为 0 的免单/测试商品）。
+- 保利店与万荷店有差异化参数：异常检测阈值（¥15 vs ¥10/20/30）、红色预警线（¥40 vs ¥100）、重点菜品列表（2道 vs 14道）、桌台分类（包房/沙发）
+- `_area()` 分类规则：包间/包房→包间，大厅/沙发→大厅，户外→户外，其余→其他。数据闭合校验会自动告警"其他"分类
+- 商品名称含全角/半角括号差异，匹配时需统一规范化处理

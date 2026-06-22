@@ -26,6 +26,7 @@ from aggregator import aggregate_groups, filter_groups
 from db_manager import DatabaseManager
 from multi_file_loader import load_and_dedup_excels, build_merged_dataset
 from daily_stats import compute_all_daily_stats, _area, _meal_period, _compute_member_status, _compute_opener
+from store_utils import attach_store_to_groups, infer_store_from_source_file
 from excel_writer import write_excel_report
 
 
@@ -127,6 +128,7 @@ def main():
     items_clean = clean_items(merged_items) if not merged_items.empty else pd.DataFrame()
 
     if not items_clean.empty:
+        items_clean['菜品收入'] = pd.to_numeric(items_clean['菜品收入'], errors='coerce').fillna(0)
         items_clean = items_clean[items_clean['菜品收入'] > 0].copy()
 
     if orders_clean.empty:
@@ -221,12 +223,29 @@ def main():
     print("  写入团体数据到数据库...")
     db.insert_groups(group_sum)
 
-    # ── Compute Daily Stats ──
+    # ── Compute Daily Stats (per store) ──
     print("\n  计算每日统计...")
-    stats_result = compute_all_daily_stats(
-        group_sum, orders_with_group, pre_merge_daily,
-        items_clean if not items_clean.empty else None
-    )
+    group_sum = attach_store_to_groups(group_sum, orders_with_group)
+    store_list = [s for s in sorted(group_sum["_store"].unique()) if s != "未知门店"]
+    if not store_list:
+        store_list = ["未知门店"]
+
+    stats_result = {
+        "overview_rows": [],
+        "order_count_rows": [],
+        "bucket_rows": [],
+        "opener_rows": [],
+    }
+    for store in store_list:
+        store_groups = group_sum[group_sum["_store"] == store].copy()
+        store_stats = compute_all_daily_stats(
+            store_groups, orders_with_group, pre_merge_daily,
+            items_clean if not items_clean.empty else None,
+            store_name=store,
+        )
+        for key in stats_result:
+            if key in store_stats:
+                stats_result[key].extend(store_stats[key])
 
     # Write daily stats to DB (INSERT OR REPLACE for affected dates)
     print("  写入每日统计到数据库...")

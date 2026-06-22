@@ -68,7 +68,7 @@ def _compute_opener(groups_df, orders_df) -> pd.Series:
     return groups_df['包含订单'].apply(_get_opener)
 
 
-def compute_all_daily_stats(groups_df, orders_df, pre_merge_daily, items_df=None):
+def compute_all_daily_stats(groups_df, orders_df, pre_merge_daily, items_df=None, store_name: str = "未知门店"):
     """
     Master function: compute all 4 sheets' daily statistics.
 
@@ -78,12 +78,13 @@ def compute_all_daily_stats(groups_df, orders_df, pre_merge_daily, items_df=None
         orders_df: orders_with_group DataFrame
         pre_merge_daily: dict[date] -> {原始订单数, 外卖订单数, 非堂食订单数}
         items_df: items DataFrame (for filter_groups, optional)
+        store_name: 门店名称（写入 daily_* 表）
 
     Returns:
         dict with keys:
-            - overview_rows: list of (date, category, sub_category, 营业额, 百分比, 人数, 人均)
-            - order_count_rows: list of (date, 原始订单数, ...)
-            - bucket_rows: list of (date, bucket, 订单数, 占比)
+            - overview_rows: list of (date, store_name, category, sub_category, 营业额, 百分比, 人数, 人均)
+            - order_count_rows: list of (date, store_name, 原始订单数, ...)
+            - bucket_rows: list of (date, store_name, bucket, 订单数, 占比)
             - opener_rows: list of (date, opener_name, order_count, total_amount)
             - all_dates: sorted list of all dates
             - all_openers: sorted list of all unique opener names
@@ -159,7 +160,7 @@ def compute_all_daily_stats(groups_df, orders_df, pre_merge_daily, items_df=None
             }
 
         # Overall
-        overview_rows.append((date, '整体', '', total_rev,
+        overview_rows.append((date, store_name, '整体', '', total_rev,
                               _seg(total_rev, total_ppl)['百分比'],
                               total_ppl, total_avg))
 
@@ -169,7 +170,7 @@ def compute_all_daily_stats(groups_df, orders_df, pre_merge_daily, items_df=None
             rev = float(day_kept.loc[mask, '订单收入'].sum())
             ppl = float(day_kept.loc[mask, '团体人数'].sum())
             seg = _seg(rev, ppl)
-            overview_rows.append((date, area, '', seg['营业额'], seg['百分比'],
+            overview_rows.append((date, store_name, area, '', seg['营业额'], seg['百分比'],
                                   seg['人数'], seg['人均']))
 
         # Lunch (午市)
@@ -177,7 +178,7 @@ def compute_all_daily_stats(groups_df, orders_df, pre_merge_daily, items_df=None
         wu_rev = float(wu['订单收入'].sum())
         wu_ppl = float(wu['团体人数'].sum())
         wu_seg = _seg(wu_rev, wu_ppl)
-        overview_rows.append((date, '午市', '整体', wu_seg['营业额'], wu_seg['百分比'],
+        overview_rows.append((date, store_name, '午市', '整体', wu_seg['营业额'], wu_seg['百分比'],
                               wu_seg['人数'], wu_seg['人均']))
         for area in ['包间', '大厅', '户外']:
             mask = (wu['_area'] == area)
@@ -186,7 +187,7 @@ def compute_all_daily_stats(groups_df, orders_df, pre_merge_daily, items_df=None
             seg = _seg(rev, ppl)
             # Percentage relative to lunch total
             pct = round(float(rev) / wu_rev * 100, 1) if wu_rev > 0 else 0.0
-            overview_rows.append((date, '午市', area, seg['营业额'], pct,
+            overview_rows.append((date, store_name, '午市', area, seg['营业额'], pct,
                                   seg['人数'], seg['人均']))
 
         # Dinner (晚市)
@@ -194,7 +195,7 @@ def compute_all_daily_stats(groups_df, orders_df, pre_merge_daily, items_df=None
         wan_rev = float(wan['订单收入'].sum())
         wan_ppl = float(wan['团体人数'].sum())
         wan_seg = _seg(wan_rev, wan_ppl)
-        overview_rows.append((date, '晚市', '整体', wan_seg['营业额'], wan_seg['百分比'],
+        overview_rows.append((date, store_name, '晚市', '整体', wan_seg['营业额'], wan_seg['百分比'],
                               wan_seg['人数'], wan_seg['人均']))
         for area in ['包间', '大厅', '户外']:
             mask = (wan['_area'] == area)
@@ -202,7 +203,7 @@ def compute_all_daily_stats(groups_df, orders_df, pre_merge_daily, items_df=None
             ppl = float(wan.loc[mask, '团体人数'].sum())
             seg = _seg(rev, ppl)
             pct = round(float(rev) / wan_rev * 100, 1) if wan_rev > 0 else 0.0
-            overview_rows.append((date, '晚市', area, seg['营业额'], pct,
+            overview_rows.append((date, store_name, '晚市', area, seg['营业额'], pct,
                                   seg['人数'], seg['人均']))
 
         # Member / Non-member
@@ -211,7 +212,7 @@ def compute_all_daily_stats(groups_df, orders_df, pre_merge_daily, items_df=None
             rev = float(day_kept.loc[mem_mask, '订单收入'].sum())
             ppl = float(day_kept.loc[mem_mask, '团体人数'].sum())
             seg = _seg(rev, ppl)
-            overview_rows.append((date, mem_label, '', seg['营业额'], seg['百分比'],
+            overview_rows.append((date, store_name, mem_label, '', seg['营业额'], seg['百分比'],
                                   seg['人数'], seg['人均']))
 
         # ── Sheet 2: Order Count Details ──
@@ -239,7 +240,7 @@ def compute_all_daily_stats(groups_df, orders_df, pre_merge_daily, items_df=None
         merged_cnt = max(0, raw_orders - waimai_cnt - feitangshi_cnt - free_order_cnt - pre_filter_cnt)
 
         order_count_rows.append((
-            date, raw_orders, waimai_cnt, feitangshi_cnt, free_order_cnt,
+            date, store_name, raw_orders, waimai_cnt, feitangshi_cnt, free_order_cnt,
             merged_cnt, pre_filter_cnt,
             snack_group_cnt, pack_group_cnt, tiny_group_cnt, bar_group_cnt,
             post_filter_cnt
@@ -257,7 +258,7 @@ def compute_all_daily_stats(groups_df, orders_df, pre_merge_daily, items_df=None
         for label, mask in buckets_def:
             cnt = int(mask.sum())
             pct = round(cnt / total_groups * 100, 1) if total_groups > 0 else 0.0
-            bucket_rows.append((date, label, cnt, pct))
+            bucket_rows.append((date, store_name, label, cnt, pct))
 
         # ── Sheet 4: Opener Stats ──
         for opener in openers_sorted:

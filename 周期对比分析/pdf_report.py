@@ -251,13 +251,17 @@ def generate_comparison_pdf(output_path, period_info, comparison_info, comp_data
     cats_tong = dict(comp_data.get('cats_tongbi', []))
 
     if cats_cur_list:
+        cat_dim = comp_data.get('category_dimension') or {}
+        section_title = cat_dim.get('title', '四、商品中类销售额分布')
+        col_label = cat_dim.get('column', '商品中类')
+        cat_field = cat_dim.get('field', '商品中类')
         story.append(Spacer(1, 0.3*cm))
-        story.append(Paragraph('四、商品中类销售额分布', subtitle_style))
+        story.append(Paragraph(section_title, subtitle_style))
         story.append(Spacer(1, 0.2*cm))
 
         cur_total = sum(v for _, v in cats_cur_list)
 
-        cat_header = ['商品中类', '本期金额', '本期占比', '环比变化', '环比变化率', '同比变化', '同比变化率']
+        cat_header = [col_label, '本期金额', '本期占比', '环比变化', '环比变化率', '同比变化', '同比变化率']
         cat_data = [cat_header]
         for cat_name, rev in cats_cur_list:
             ring_rev = cats_ring.get(cat_name)
@@ -336,6 +340,16 @@ def generate_comparison_pdf(output_path, period_info, comparison_info, comp_data
         story.append(cat_table)
         story.append(Spacer(1, 0.15*cm))
         story.append(Paragraph('<font size="7" color="#666666">注：以上为包含自取外卖订单和吧台及零食购买团体的商品销售额，合计大于第一部分经营数据中的营业额。第三方平台外卖单并未记入。</font>', normal_style))
+        uncat = comp_data.get('uncategorized_products') or []
+        if uncat:
+            from xml.sax.saxutils import escape
+            from comparator import format_uncategorized_note
+            story.append(Spacer(1, 0.1*cm))
+            for line in format_uncategorized_note(uncat, cat_field).split('\n'):
+                story.append(Paragraph(
+                    f'<font size="6" color="#666666">{escape(line)}</font>',
+                    normal_style,
+                ))
 
     story.append(Spacer(1, 0.5*cm))
 

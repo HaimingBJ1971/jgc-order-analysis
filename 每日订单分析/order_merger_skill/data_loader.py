@@ -31,6 +31,15 @@ def parse_export(df, header_keyword="订单号"):
     return data
 
 
+def _read_pos_metadata_store(df_raw) -> str:
+    for _, row in df_raw.head(10).iterrows():
+        vals = [str(v).strip() for v in row.values if str(v) != "nan"]
+        for i, val in enumerate(vals):
+            if val == "门店名称" and i + 1 < len(vals):
+                return vals[i + 1]
+    return ""
+
+
 def load_excel(file_path):
     """
     加载Excel文件
@@ -46,6 +55,11 @@ def load_excel(file_path):
 
     orders = parse_export(orders_raw)
     items = parse_export(items_raw)
+
+    store_name = _read_pos_metadata_store(orders_raw)
+    if store_name:
+        orders["门店名称"] = store_name
+        items["门店名称"] = store_name
 
     return orders, items
 

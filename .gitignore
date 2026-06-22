@@ -6,7 +6,12 @@
 !CLAUDE.md
 !PRD.md
 !README.md
+!AGENTS.md
+!**/README.md
 !*.plan.md
+
+# 桌探下载缓存
+桌探邮件下载/downloads/
 
 # 输出目录
 output/
