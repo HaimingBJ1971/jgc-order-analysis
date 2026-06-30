@@ -121,10 +121,12 @@ python3 main.py \
 ```bash
 四维度自动评审/.venv/bin/python 订单与桌访合并/饮品订单统计/generate_drink_order_stats_pdf.py \
   --excel "path/店内订单明细...万荷.xlsx" \
-  --output "path/万荷饮品酒水订单统计_YYYYMMDD_YYYYMMDD.pdf"
+  --output "path/万荷饮品酒水订单统计_YYYYMMDD_YYYYMMDD.pdf" \
+  --mode week \
+  --db 订单与桌访合并/长期订单分析/output/长期订单分析.db
 ```
 
-A4 纵置 PDF；九类商品中类；统计口径与订单桌访合并一致（消费团体数）。详见 `饮品订单统计/README.md`。
+十一类商品中类；收入排除套餐父项、保留套餐子项，额占比分母为整体营业额。含 `--mode` 时输出摘要三期原始数据、本周简表与同比环比对比表（A4 横置）。详见 `饮品订单统计/README.md`。
 
 ### 桌访语料转换（四维度心理学奖）
 

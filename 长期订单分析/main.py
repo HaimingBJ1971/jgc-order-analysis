@@ -18,10 +18,13 @@ from datetime import datetime
 # Add order_merger_skill to path
 _skill_dir = os.path.join(os.path.dirname(__file__), '..', '每日订单分析', 'order_merger_skill')
 sys.path.insert(0, os.path.abspath(_skill_dir))
+_order_root = os.path.join(os.path.dirname(__file__), '..')
+sys.path.insert(0, os.path.abspath(_order_root))
 
 from data_loader import clean_orders, clean_items, get_item_features, load_excel
 from order_merger import merge_orders
 from aggregator import aggregate_groups, filter_groups
+from ingest_validator import validate_pos_files
 
 from db_manager import DatabaseManager
 from multi_file_loader import load_and_dedup_excels, build_merged_dataset
@@ -54,6 +57,15 @@ def main():
     print("长期订单分析工具")
     print("=" * 50)
 
+    print("\n[校验] 入库前完整性检查...")
+    v = validate_pos_files(args.files)
+    if not v.ok:
+        for e in v.errors:
+            print(f"  ERROR: {e}")
+        print("\n请修正 Excel 后重新提交，再执行入库。")
+        raise SystemExit(1)
+    print("  列与日期完整性校验通过 ✓")
+
     # ── Phase A: Incremental Detection ──
     print("\n[Phase A] 增量检测...")
 
@@ -83,6 +95,7 @@ def main():
     raw_orders = result['raw_orders']
     raw_items = result['raw_items']
     pre_merge_daily = result['pre_merge_daily']
+    pre_merge_daily_by_store = result.get('pre_merge_daily_by_store', {})
 
     if raw_orders.empty:
         print("  无有效新订单。")
@@ -238,8 +251,9 @@ def main():
     }
     for store in store_list:
         store_groups = group_sum[group_sum["_store"] == store].copy()
+        store_pre_merge_daily = pre_merge_daily_by_store.get(store, pre_merge_daily)
         store_stats = compute_all_daily_stats(
-            store_groups, orders_with_group, pre_merge_daily,
+            store_groups, orders_with_group, store_pre_merge_daily,
             items_clean if not items_clean.empty else None,
             store_name=store,
         )

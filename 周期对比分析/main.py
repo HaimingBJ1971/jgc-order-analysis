@@ -20,10 +20,13 @@ from datetime import datetime
 # Add order_merger_skill to path
 _skill_dir = os.path.join(os.path.dirname(__file__), '..', '每日订单分析', 'order_merger_skill')
 sys.path.insert(0, os.path.abspath(_skill_dir))
+_order_root = os.path.join(os.path.dirname(__file__), '..')
+sys.path.insert(0, os.path.abspath(_order_root))
 
 from data_loader import load_excel, clean_orders, clean_items, get_item_features
 from order_merger import merge_orders
 from aggregator import aggregate_groups, filter_groups
+from ingest_validator import validate_pos_excel
 
 # Add long-term analysis modules to path
 _lt_dir = os.path.join(os.path.dirname(__file__), '..', '长期订单分析')
@@ -53,6 +56,15 @@ def main():
     print("=" * 50)
     print("周期对比分析工具")
     print("=" * 50)
+
+    print("\n[0/5] 入库前完整性检查...")
+    v = validate_pos_excel(args.excel)
+    if not v.ok:
+        for e in v.errors:
+            print(f"  ERROR: {e}")
+        print("\n请修正 Excel 后重新提交，再执行入库。")
+        raise SystemExit(1)
+    print("  列与日期完整性校验通过 ✓")
 
     # ── Step 1: Load data ──
     print("\n[1/5] 加载数据...")

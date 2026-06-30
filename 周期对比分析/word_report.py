@@ -127,7 +127,12 @@ def generate_comparison_word(output_path, period_info, comparison_info, comp_dat
             _change_str(item['tongbi_pct'], tong_neg),
         ])
     _add_table(doc, headers, rows)
-    _add_para(doc, '注：以上营业额已扣除自取外卖单、吧台及零食购买团体。第三方平台外卖单并未记入。', size=7, color=RGBColor(0x66, 0x66, 0x66))
+    _add_para(
+        doc,
+        '注：整体营业额 = 堂食分桌总营业额 + 自取外卖单、吧台及零食购买团体、第三方平台外卖单合计；第三方平台外卖按已完成订单的订单收入计入。',
+        size=7,
+        color=RGBColor(0x66, 0x66, 0x66),
+    )
 
     # ── Section 2: Drinks ──
     _add_heading(doc, '二、酒水饮料甜品销售排行', level=1)
@@ -152,6 +157,12 @@ def generate_comparison_word(output_path, period_info, comparison_info, comp_dat
                 (str(tong_qty) if tong_qty else '-', None), td, tr,
             ])
         _add_table(doc, d_headers, d_rows)
+        _add_para(
+            doc,
+            '注：本表销量采用 POS 店内全量正收入口径，包含自取外卖单、吧台及零食购买团体；赠送、免单、全额优惠等菜品收入≤0的商品不计入销量。不得用“销售数量-赠菜数量”替代正收入销量。第三方平台外卖若无商品级明细，不纳入商品销量排行。',
+            size=7,
+            color=RGBColor(0x66, 0x66, 0x66),
+        )
     else:
         _add_para(doc, '（无数据）')
 
@@ -171,6 +182,12 @@ def generate_comparison_word(output_path, period_info, comparison_info, comp_dat
             (str(tq) if tq else '-', None), td, tr,
         ])
     _add_table(doc, dish_headers, dish_rows)
+    _add_para(
+        doc,
+        '注：本表销量采用 POS 店内全量正收入口径，包含自取外卖单、吧台及零食购买团体；赠送、免单、全额优惠等菜品收入≤0的商品不计入销量。不得用“销售数量-赠菜数量”替代正收入销量。第三方平台外卖若无商品级明细，不纳入商品销量排行。',
+        size=7,
+        color=RGBColor(0x66, 0x66, 0x66),
+    )
 
     # ── Section 4: Categories ──
     cat_dim = comp_data.get('category_dimension') or {}
@@ -220,7 +237,12 @@ def generate_comparison_word(output_path, period_info, comparison_info, comp_dat
                 _change_str(f'{(cur_total_rev - tong_total_rev) / tong_total_rev * 100:+.1f}%', (cur_total_rev - tong_total_rev) < 0) if tong_total_rev > 0 else ('-', None),
             ])
         _add_table(doc, cat_headers, cat_rows)
-        _add_para(doc, '注：以上为包含自取外卖订单和吧台及零食购买团体的商品销售额，合计大于第一部分经营数据中的营业额。第三方平台外卖单并未记入。', size=7, color=RGBColor(0x66, 0x66, 0x66))
+        _add_para(
+            doc,
+            '注：以上为 POS 店内商品归因销售额，包含自取外卖单、吧台及零食购买团体；赠送、免单、全额优惠等菜品收入≤0的商品不计入。套餐父项不计入，套餐子项按实际商品品类归因，避免父项和子项重复统计。第三方平台外卖若无商品级明细，不纳入商品分类销售额。',
+            size=7,
+            color=RGBColor(0x66, 0x66, 0x66),
+        )
         uncat = comp_data.get('uncategorized_products') or []
         if uncat:
             from comparator import format_uncategorized_note
@@ -259,6 +281,12 @@ def generate_comparison_word(output_path, period_info, comparison_info, comp_dat
             rd_s, rr_s, td_s, tr_s,
         ])
     _add_table(doc, bkt_headers, bkt_rows)
+    _add_para(
+        doc,
+        '注：本部分客单价对应“堂食分桌总营业额”，即整体营业额扣除自取外卖单、吧台及零食购买团体、第三方平台外卖单合计。',
+        size=7,
+        color=RGBColor(0x66, 0x66, 0x66),
+    )
 
     # ── Data quality note ──
     dq = comp_data['data_quality']

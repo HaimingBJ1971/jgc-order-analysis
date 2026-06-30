@@ -11,6 +11,16 @@
 
 ## 用法
 
+推荐通过公共 workflow 入口调用：
+
+```bash
+四维度自动评审/.venv/bin/python \
+  workflow/jingucang-cycle-workflow/scripts/cycle_workflow.py \
+  convert-corpus "/path/to/桌访数据_2026-06-08_至_2026-06-14_467条.csv"
+```
+
+底层脚本仍可直接调用：
+
 ```bash
 cd 订单与桌访合并/桌访语料转换
 

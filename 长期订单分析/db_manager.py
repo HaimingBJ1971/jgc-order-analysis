@@ -37,11 +37,12 @@ class DatabaseManager:
                 订单号 TEXT NOT NULL,
                 商品编码 TEXT,
                 商品名称 TEXT,
+                item_line_key TEXT,
                 原始数据 TEXT NOT NULL,
                 source_file TEXT,
                 ingest_time TEXT NOT NULL
             );
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_items_dedup ON items(订单号, 商品编码, 商品名称);
+            DROP INDEX IF EXISTS idx_items_dedup;
 
             CREATE TABLE IF NOT EXISTS groups (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -111,8 +112,45 @@ class DatabaseManager:
             CREATE INDEX IF NOT EXISTS idx_groups_date ON groups(group_date);
             CREATE INDEX IF NOT EXISTS idx_groups_table ON groups(table_name);
         """)
-        self.conn.commit()
+        self._ensure_item_line_key()
         self._migrate_schema()
+
+    def _ensure_item_line_key(self):
+        """Migrate legacy item rows from product-level uniqueness to POS row-level keys."""
+        columns = {
+            row[1]
+            for row in self.conn.execute("PRAGMA table_info(items)").fetchall()
+        }
+        if "item_line_key" not in columns:
+            self.conn.execute("ALTER TABLE items ADD COLUMN item_line_key TEXT")
+        self.conn.execute("DROP INDEX IF EXISTS idx_items_dedup")
+        rows = self.conn.execute(
+            "SELECT id, 订单号, 商品编码, 商品名称, 原始数据 FROM items "
+            "WHERE item_line_key IS NULL OR item_line_key = ''"
+        ).fetchall()
+        for item_id, order_id, item_code, item_name, raw_json in rows:
+            try:
+                data = json.loads(raw_json)
+            except (json.JSONDecodeError, TypeError):
+                data = {}
+            key = self.item_line_key(data, str(order_id), str(item_code or ""), str(item_name or ""), item_id)
+            self.conn.execute(
+                "UPDATE items SET item_line_key=? WHERE id=?",
+                (key, item_id),
+            )
+        self.conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_items_line_dedup "
+            "ON items(source_file, item_line_key)"
+        )
+        self.conn.commit()
+
+    @staticmethod
+    def item_line_key(data: dict, order_id: str, item_code: str, item_name: str, row_index) -> str:
+        """Return a stable POS row-level key; never collapse repeated same-product lines."""
+        seq = data.get("序号")
+        if seq not in (None, ""):
+            return f"{order_id}|seq:{seq}"
+        return f"{order_id}|{item_code}|{item_name}|row:{row_index}"
 
     def _column_exists(self, table: str, column: str) -> bool:
         rows = self.conn.execute(f"PRAGMA table_info({table})").fetchall()
@@ -233,6 +271,18 @@ class DatabaseManager:
 
     # ── Write Raw Data ──────────────────────────────────────
 
+    _INTERNAL_ROW_KEYS = frozenset({"_date", "_dt", "_item_key"})
+
+    @classmethod
+    def row_to_raw_json(cls, row) -> str:
+        row_dict = row.to_dict() if hasattr(row, "to_dict") else dict(row)
+        payload = {
+            k: str(v) if not isinstance(v, (int, float, bool, type(None))) else v
+            for k, v in row_dict.items()
+            if k not in cls._INTERNAL_ROW_KEYS
+        }
+        return json.dumps(payload, ensure_ascii=False, default=str)
+
     def insert_orders(self, orders_df, source_file: str) -> int:
         """Insert orders into DB. Returns count of actually inserted rows."""
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -242,11 +292,7 @@ class DatabaseManager:
             if not order_id.isdigit():
                 continue
             row_source = str(row.get("source_file", source_file)) if "source_file" in orders_df.columns else source_file
-            raw_json = json.dumps(
-                {k: str(v) if not isinstance(v, (int, float, bool, type(None))) else v
-                 for k, v in row.to_dict().items()},
-                ensure_ascii=False, default=str
-            )
+            raw_json = self.row_to_raw_json(row)
             try:
                 self.conn.execute(
                     "INSERT OR IGNORE INTO orders (订单号, 原始数据, source_file, ingest_time) VALUES (?,?,?,?)",
@@ -258,25 +304,43 @@ class DatabaseManager:
         self.conn.commit()
         return count
 
-    def insert_items(self, items_df, source_file: str) -> int:
-        """Upsert items by (订单号, 商品编码, 商品名称). Returns count written."""
+    def replace_orders(self, orders_df, source_file: str) -> int:
+        """Upsert orders with full 原始数据 (INSERT OR REPLACE)."""
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         count = 0
-        for _, row in items_df.iterrows():
+        for _, row in orders_df.iterrows():
+            order_id = str(row["订单号"])
+            if not order_id.isdigit():
+                continue
+            row_source = str(row.get("source_file", source_file)) if "source_file" in orders_df.columns else source_file
+            raw_json = self.row_to_raw_json(row)
+            self.conn.execute(
+                "INSERT OR REPLACE INTO orders (订单号, 原始数据, source_file, ingest_time) VALUES (?,?,?,?)",
+                (order_id, raw_json, row_source, now),
+            )
+            count += 1
+        self.conn.commit()
+        return count
+
+    def insert_items(self, items_df, source_file: str) -> int:
+        """Upsert POS item lines by row-level key. Returns count written."""
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        count = 0
+        for row_index, row in items_df.iterrows():
             order_id = str(row["订单号"])
             item_code = str(row.get("商品编码", ""))
             item_name = str(row.get("商品名称", ""))
-            raw_json = json.dumps(
-                {k: str(v) if not isinstance(v, (int, float, bool, type(None))) else v
-                 for k, v in row.to_dict().items()},
-                ensure_ascii=False, default=str
+            row_source = str(row.get("source_file", source_file)) if "source_file" in items_df.columns else source_file
+            raw_json = self.row_to_raw_json(row)
+            item_line_key = self.item_line_key(
+                row.to_dict(), order_id, item_code, item_name, row_index
             )
             try:
                 self.conn.execute(
                     "INSERT OR REPLACE INTO items "
-                    "(订单号, 商品编码, 商品名称, 原始数据, source_file, ingest_time) "
-                    "VALUES (?,?,?,?,?,?)",
-                    (order_id, item_code, item_name, raw_json, source_file, now)
+                    "(订单号, 商品编码, 商品名称, item_line_key, 原始数据, source_file, ingest_time) "
+                    "VALUES (?,?,?,?,?,?,?)",
+                    (order_id, item_code, item_name, item_line_key, raw_json, row_source, now)
                 )
                 count += 1
             except Exception:
@@ -660,6 +724,127 @@ class DatabaseManager:
             item_rows = self.conn.execute(
                 "SELECT 订单号, 原始数据, source_file, ingest_time FROM items WHERE 订单号 = ?",
                 (oid,)
+            ).fetchall()
+            for row in item_rows:
+                if store_name:
+                    try:
+                        data = json.loads(row[1])
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+                    item_store = infer_store_from_pos_name(str(data.get("门店名称", "")))
+                    if item_store != "未知门店" and item_store != store_name:
+                        continue
+                all_items.append(row)
+        return all_items
+
+    @staticmethod
+    def _raw_order_date(data: dict) -> str:
+        raw = data.get("下单时间") or data.get("营业日") or data.get("营业日期") or ""
+        text = str(raw).strip()
+        if not text:
+            return ""
+        return text[:10].replace("/", "-")
+
+    def get_order_ids_for_period(self, start_date: str, end_date: str, store_name: str | None = None) -> set[str]:
+        """Return POS order IDs by raw order date and store, independent of group filtering."""
+        from store_utils import infer_store_from_pos_name, infer_store_from_source_file
+
+        ids: set[str] = set()
+        rows = self.conn.execute("SELECT 订单号, 原始数据, source_file FROM orders").fetchall()
+        for oid, raw_json, source_file in rows:
+            try:
+                data = json.loads(raw_json)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            date = self._raw_order_date(data)
+            if not date or date < start_date or date > end_date:
+                continue
+            order_type = str(data.get("订单类型", "")).strip()
+            if order_type and order_type != "堂食":
+                continue
+            if store_name:
+                raw_store = infer_store_from_pos_name(str(data.get("门店名称", "")))
+                if raw_store == "未知门店":
+                    raw_store = infer_store_from_source_file(source_file or "")
+                if raw_store != store_name:
+                    continue
+            ids.add(str(oid))
+        return ids
+
+    def get_order_revenue_for_period(self, start_date: str, end_date: str, store_name: str | None = None) -> float:
+        """Sum raw POS order revenue by date and store."""
+        ids = self.get_order_ids_for_period(start_date, end_date, store_name)
+        if not ids:
+            return 0.0
+        total = 0.0
+        for oid in ids:
+            row = self.conn.execute("SELECT 原始数据 FROM orders WHERE 订单号 = ?", (oid,)).fetchone()
+            if not row:
+                continue
+            try:
+                data = json.loads(row[0])
+            except (json.JSONDecodeError, TypeError):
+                continue
+            try:
+                total += float(data.get("订单收入") or data.get("菜品收入") or 0)
+            except (TypeError, ValueError):
+                continue
+        return total
+
+    def _table_exists(self, table_name: str) -> bool:
+        row = self.conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+            (table_name,),
+        ).fetchone()
+        return row is not None
+
+    def get_takeaway_revenue_for_period(self, start_date: str, end_date: str, store_name: str | None = None) -> float:
+        """Sum completed third-party platform takeaway order revenue by date and store."""
+        if not self._table_exists("takeaway_orders"):
+            return 0.0
+        params: list = [start_date, end_date]
+        store_clause = ""
+        if store_name:
+            store_clause = " AND store_name = ?"
+            params.append(store_name)
+        rows = self.conn.execute(
+            f"""
+            SELECT raw_data
+            FROM takeaway_orders
+            WHERE date BETWEEN ? AND ?
+              AND status = '已完成'
+              {store_clause}
+            """,
+            params,
+        ).fetchall()
+        total = 0.0
+        for (raw_json,) in rows:
+            try:
+                data = json.loads(raw_json)
+                total += float(data.get("订单收入") or data.get("菜品收入") or 0)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                continue
+        return total
+
+    def get_total_revenue_for_period(self, start_date: str, end_date: str, store_name: str | None = None) -> float:
+        """Sum POS order revenue plus completed third-party platform takeaway revenue."""
+        return (
+            self.get_order_revenue_for_period(start_date, end_date, store_name)
+            + self.get_takeaway_revenue_for_period(start_date, end_date, store_name)
+        )
+
+    def get_all_items_for_period(self, start_date: str, end_date: str, store_name: str | None = None):
+        """Return all POS item rows by raw order date and store, independent of group filtering."""
+        from store_utils import infer_store_from_pos_name
+
+        oid_set = self.get_order_ids_for_period(start_date, end_date, store_name)
+        if not oid_set:
+            return []
+        all_items = []
+        for oid in oid_set:
+            item_rows = self.conn.execute(
+                "SELECT 订单号, 原始数据, source_file, ingest_time FROM items WHERE 订单号 = ?",
+                (oid,),
             ).fetchall()
             for row in item_rows:
                 if store_name:

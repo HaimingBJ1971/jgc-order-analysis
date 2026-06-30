@@ -99,7 +99,7 @@ def generate_comparison_pdf(output_path, period_info, comparison_info, comp_data
             _p_color(item['tongbi_pct'], tong_color, cell_r),
         ])
 
-    op_table = Table(op_data, colWidths=[4.5*cm, 2.5*cm, 2.5*cm, 2.0*cm, 2.5*cm, 2.0*cm], repeatRows=2)
+    op_table = Table(op_data, colWidths=[5.8*cm, 2.2*cm, 2.3*cm, 1.8*cm, 2.3*cm, 1.8*cm], repeatRows=2)
     op_table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 1), colors.HexColor('#2c3e50')),
         ('TEXTCOLOR', (0, 0), (-1, 1), colors.white),
@@ -116,7 +116,12 @@ def generate_comparison_pdf(output_path, period_info, comparison_info, comp_data
     ]))
     story.append(op_table)
     story.append(Spacer(1, 0.15*cm))
-    story.append(Paragraph('<font size="7" color="#666666">注：以上营业额已扣除自取外卖单、吧台及零食购买团体。第三方平台外卖单并未记入。</font>', normal_style))
+    story.append(Paragraph(
+        '<font size="7" color="#666666">注：整体营业额 = 堂食分桌总营业额 + '
+        '自取外卖单、吧台及零食购买团体、第三方平台外卖单合计；'
+        '第三方平台外卖按已完成订单的订单收入计入。</font>',
+        normal_style,
+    ))
     story.append(Spacer(1, 0.5*cm))
 
     # ── Section 2: Drink & dessert rankings ──
@@ -178,6 +183,14 @@ def generate_comparison_pdf(output_path, period_info, comparison_info, comp_data
             ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
         ]))
         story.append(drink_table)
+        story.append(Spacer(1, 0.12*cm))
+        story.append(Paragraph(
+            '<font size="7" color="#666666">注：本表销量采用 POS 店内全量正收入口径，'
+            '包含自取外卖单、吧台及零食购买团体；赠送、免单、全额优惠等菜品收入≤0的商品不计入销量。'
+            '不得用“销售数量-赠菜数量”替代正收入销量。'
+            '第三方平台外卖若无商品级明细，不纳入商品销量排行。</font>',
+            normal_style,
+        ))
     else:
         story.append(Paragraph('（无数据）', normal_style))
 
@@ -244,6 +257,14 @@ def generate_comparison_pdf(output_path, period_info, comparison_info, comp_data
         ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
     ]))
     story.append(dish_table)
+    story.append(Spacer(1, 0.12*cm))
+    story.append(Paragraph(
+        '<font size="7" color="#666666">注：本表销量采用 POS 店内全量正收入口径，'
+        '包含自取外卖单、吧台及零食购买团体；赠送、免单、全额优惠等菜品收入≤0的商品不计入销量。'
+        '不得用“销售数量-赠菜数量”替代正收入销量。'
+        '第三方平台外卖若无商品级明细，不纳入商品销量排行。</font>',
+        normal_style,
+    ))
 
     # ── Category distribution ──
     cats_cur_list = comp_data.get('cats_current', [])
@@ -339,7 +360,13 @@ def generate_comparison_pdf(output_path, period_info, comparison_info, comp_data
         ]))
         story.append(cat_table)
         story.append(Spacer(1, 0.15*cm))
-        story.append(Paragraph('<font size="7" color="#666666">注：以上为包含自取外卖订单和吧台及零食购买团体的商品销售额，合计大于第一部分经营数据中的营业额。第三方平台外卖单并未记入。</font>', normal_style))
+        story.append(Paragraph(
+            '<font size="7" color="#666666">注：以上为 POS 店内商品归因销售额，'
+            '包含自取外卖单、吧台及零食购买团体；赠送、免单、全额优惠等菜品收入≤0的商品不计入。'
+            '套餐父项不计入，套餐子项按实际商品品类归因，避免父项和子项重复统计。'
+            '第三方平台外卖若无商品级明细，不纳入商品分类销售额。</font>',
+            normal_style,
+        ))
         uncat = comp_data.get('uncategorized_products') or []
         if uncat:
             from xml.sax.saxutils import escape
@@ -416,6 +443,12 @@ def generate_comparison_pdf(output_path, period_info, comparison_info, comp_data
         ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
     ]))
     story.append(bkt_table)
+    story.append(Spacer(1, 0.12*cm))
+    story.append(Paragraph(
+        '<font size="7" color="#666666">注：本部分客单价对应“堂食分桌总营业额”，'
+        '即整体营业额扣除自取外卖单、吧台及零食购买团体、第三方平台外卖单合计。</font>',
+        normal_style,
+    ))
 
     # ── Data quality note ──
     dq = comp_data['data_quality']

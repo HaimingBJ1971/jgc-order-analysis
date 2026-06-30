@@ -10,13 +10,43 @@ import os
 import sys
 
 # Reuse existing data loader
+_lt_dir = os.path.dirname(__file__)
+sys.path.insert(0, os.path.abspath(_lt_dir))
 _skill_dir = os.path.join(os.path.dirname(__file__), '..', '每日订单分析', 'order_merger_skill')
 sys.path.insert(0, os.path.abspath(_skill_dir))
 from data_loader import load_excel
+from store_utils import infer_store_from_pos_name, read_pos_store_from_excel
 
 
 def _extract_basename(path: str) -> str:
     return os.path.basename(path)
+
+
+def _empty_pre_merge_counts() -> dict:
+    return {'原始订单数': 0, '外卖订单数': 0, '非堂食订单数': 0}
+
+
+def _add_pre_merge_counts(
+    target: dict,
+    date: str,
+    *,
+    count_raw: int,
+    waimai: int,
+    fei_tangshi: int,
+) -> None:
+    if date not in target:
+        target[date] = _empty_pre_merge_counts()
+    target[date]['原始订单数'] += count_raw
+    target[date]['外卖订单数'] += waimai
+    target[date]['非堂食订单数'] += fei_tangshi
+
+
+def _detect_store_from_excel(file_path: str) -> str:
+    """Detect store from POS metadata. Never infer store from filename."""
+    try:
+        return infer_store_from_pos_name(read_pos_store_from_excel(file_path))
+    except Exception:
+        return "未知门店"
 
 
 def load_and_dedup_excels(file_paths: list, existing_order_ids: set = None):
@@ -32,6 +62,7 @@ def load_and_dedup_excels(file_paths: list, existing_order_ids: set = None):
             - raw_orders: deduped raw orders DataFrame (all new orders)
             - raw_items: deduped raw items DataFrame
             - pre_merge_daily: dict[date_str] -> {原始订单数, 外卖订单数, 非堂食订单数}
+            - pre_merge_daily_by_store: dict[store] -> dict[date_str] -> counts
             - files_loaded: list of successfully loaded file names
             - total_found: total order count across all files
             - total_new: count of orders not already in DB
@@ -43,6 +74,7 @@ def load_and_dedup_excels(file_paths: list, existing_order_ids: set = None):
     all_orders_raw = []
     all_items_raw = []
     pre_merge_counts = {}  # date_str -> {原始订单数, 外卖订单数, 非堂食订单数}
+    pre_merge_counts_by_store = {}
     files_loaded = []
     skipped_files = []
 
@@ -52,6 +84,7 @@ def load_and_dedup_excels(file_paths: list, existing_order_ids: set = None):
             continue
 
         fname = _extract_basename(fp)
+        store_name = _detect_store_from_excel(fp)
         try:
             orders_raw, items_raw = load_excel(fp)
         except Exception as e:
@@ -75,11 +108,22 @@ def load_and_dedup_excels(file_paths: list, existing_order_ids: set = None):
                 else:
                     fei_tangshi = 0
 
-                if date not in pre_merge_counts:
-                    pre_merge_counts[date] = {'原始订单数': 0, '外卖订单数': 0, '非堂食订单数': 0}
-                pre_merge_counts[date]['原始订单数'] += count_raw
-                pre_merge_counts[date]['外卖订单数'] += waimai
-                pre_merge_counts[date]['非堂食订单数'] += fei_tangshi
+                _add_pre_merge_counts(
+                    pre_merge_counts,
+                    date,
+                    count_raw=count_raw,
+                    waimai=waimai,
+                    fei_tangshi=fei_tangshi,
+                )
+                if store_name != "未知门店":
+                    pre_merge_counts_by_store.setdefault(store_name, {})
+                    _add_pre_merge_counts(
+                        pre_merge_counts_by_store[store_name],
+                        date,
+                        count_raw=count_raw,
+                        waimai=waimai,
+                        fei_tangshi=fei_tangshi,
+                    )
 
         all_orders_raw.append(orders_raw)
         if items_raw is not None and not items_raw.empty:
@@ -91,6 +135,7 @@ def load_and_dedup_excels(file_paths: list, existing_order_ids: set = None):
             'raw_orders': pd.DataFrame(),
             'raw_items': pd.DataFrame(),
             'pre_merge_daily': pre_merge_counts,
+            'pre_merge_daily_by_store': pre_merge_counts_by_store,
             'files_loaded': [],
             'total_found': 0,
             'total_new': 0,
@@ -118,6 +163,7 @@ def load_and_dedup_excels(file_paths: list, existing_order_ids: set = None):
             'raw_orders': pd.DataFrame(),
             'raw_items': pd.DataFrame(),
             'pre_merge_daily': pre_merge_counts,
+            'pre_merge_daily_by_store': pre_merge_counts_by_store,
             'files_loaded': files_loaded,
             'total_found': total_found,
             'total_new': 0,
@@ -128,18 +174,8 @@ def load_and_dedup_excels(file_paths: list, existing_order_ids: set = None):
     orders_dedup = orders_concat.drop_duplicates(subset='订单号', keep='first').copy()
 
     if not items_concat.empty:
-        # items dedup by composite key
-        if '商品编码' in items_concat.columns and '商品名称' in items_concat.columns:
-            items_concat['_item_key'] = (
-                items_concat['订单号'].astype(str) + '|' +
-                items_concat['商品编码'].astype(str) + '|' +
-                items_concat['商品名称'].astype(str)
-            )
-            items_dedup = items_concat.drop_duplicates(subset='_item_key', keep='first').copy()
-            items_dedup = items_dedup.drop(columns=['_item_key'])
-        else:
-            items_dedup = items_concat.drop_duplicates(keep='first').copy()
-
+        # 商品明细必须保留 POS 行级数据；同一订单同一商品多次加单/拆行都是真实销量。
+        items_dedup = items_concat.copy()
         # Only keep items whose orders survived dedup
         valid_order_ids = set(orders_dedup['订单号'].astype(str))
         items_dedup = items_dedup[items_dedup['订单号'].astype(str).isin(valid_order_ids)].copy()
@@ -150,6 +186,7 @@ def load_and_dedup_excels(file_paths: list, existing_order_ids: set = None):
         'raw_orders': orders_dedup,
         'raw_items': items_dedup,
         'pre_merge_daily': pre_merge_counts,
+        'pre_merge_daily_by_store': pre_merge_counts_by_store,
         'files_loaded': files_loaded,
         'total_found': total_found,
         'total_new': len(orders_dedup),

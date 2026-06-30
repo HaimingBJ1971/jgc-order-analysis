@@ -52,10 +52,38 @@ def _is_uncategorized_raw(raw) -> bool:
     return cat.lower() in _INVALID_CATEGORY_TOKENS or cat in _INVALID_CATEGORY_TOKENS
 
 
+def _item_revenue(data: dict) -> float:
+    """Return POS item revenue; invalid values are treated as zero."""
+    try:
+        return float(data.get('菜品收入', 0) or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _item_qty(data: dict) -> float:
+    """Return POS item quantity; invalid values are treated as zero."""
+    try:
+        return float(data.get('数量', 0) or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _is_positive_revenue_item(data: dict) -> bool:
+    """商品销量/销售额统一商品归因口径。
+
+    只要 `菜品收入 <= 0`，无论是赠送、免单、全额优惠还是测试单，
+    都不计入销量/销售额。不要用“销售数量 - 赠菜数量”替代该判断，
+    因为全额优惠/免单也会形成零收入数量。
+
+    POS 套餐会同时导出“套餐”父项和“套餐子项”。收入归因只能保留
+    子项，父项必须剔除，否则第四节商品分类销售额会重复统计。
+    """
+    return _item_revenue(data) > 0 and str(data.get('菜品销售类型', '')).strip() != '套餐'
+
+
 def _calc_uncategorized_products(items_data, category_field: str = '商品中类'):
     """Aggregate products with missing POS category in the given field."""
     agg = {}
-    seen = set()
     for item_row in items_data:
         try:
             data = json.loads(item_row[1])
@@ -68,14 +96,10 @@ def _calc_uncategorized_products(items_data, category_field: str = '商品中类
         name = str(data.get('商品名称', '')).strip()
         if not name or name in ('nan', 'None'):
             continue
-        key = (oid, code, name)
-        if key in seen:
+        if not _is_positive_revenue_item(data):
             continue
-        seen.add(key)
-        qty = int(float(data.get('数量', 0) or 0))
-        rev = float(data.get('菜品收入', 0) or 0)
-        if rev <= 0:
-            continue
+        qty = int(_item_qty(data))
+        rev = _item_revenue(data)
         bucket = agg.setdefault(name, {'qty': 0, 'rev': 0.0})
         bucket['qty'] += qty
         bucket['rev'] += rev
@@ -169,24 +193,19 @@ def _aggr_daily_buckets(rows):
 
 
 def _calc_dish_rankings(items_data, target_dishes):
-    """Calculate dish sales rankings from items data. Deduplicates by (订单号, 商品编码, 商品名称)."""
+    """Calculate dish sales rankings from POS item lines."""
     dish_qty = {}
     for dish in target_dishes:
         dish_qty[dish] = 0
-    seen = set()
     for item_row in items_data:
         try:
             data = json.loads(item_row[1])
         except (json.JSONDecodeError, TypeError):
             continue
-        oid = str(data.get('订单号', ''))
-        code = str(data.get('商品编码', ''))
         name = str(data.get('商品名称', ''))
-        key = (oid, code, name)
-        if key in seen:
+        qty = _item_qty(data)
+        if qty <= 0 or not _is_positive_revenue_item(data):
             continue
-        seen.add(key)
-        qty = float(data.get('数量', 0) or 0)
         for dish in target_dishes:
             normalized_target = dish.replace('（', '(').replace('）', ')')
             normalized_name = name.replace('（', '(').replace('）', ')')
@@ -196,25 +215,19 @@ def _calc_dish_rankings(items_data, target_dishes):
 
 
 def _calc_category_distribution(items_data, category_field: str = '商品中类'):
-    """Calculate revenue distribution by category field. Deduplicates by (订单号, 商品编码, 商品名称)."""
+    """Calculate revenue distribution by category field from POS item lines."""
     cat_rev = {}
-    seen = set()
     for item_row in items_data:
         try:
             data = json.loads(item_row[1])
         except (json.JSONDecodeError, TypeError):
             continue
-        oid = str(data.get('订单号', ''))
-        code = str(data.get('商品编码', ''))
-        name = str(data.get('商品名称', ''))
-        key = (oid, code, name)
-        if key in seen:
-            continue
-        seen.add(key)
         cat = _normalize_category(data.get(category_field, ''))
         if cat is None:
             continue
-        rev = float(data.get('菜品收入', 0) or 0)
+        if not _is_positive_revenue_item(data):
+            continue
+        rev = _item_revenue(data)
         cat_rev[cat] = cat_rev.get(cat, 0) + rev
     return sorted(cat_rev.items(), key=lambda x: x[1], reverse=True)
 
@@ -232,7 +245,6 @@ def _calc_drink_dessert_rankings(items_data):
     Returns [(name, qty, cat), ...] with cat being the 商品中类.
     """
     dish_info = {}  # name -> {'qty': int, 'cat': str}
-    seen = set()
     for item_row in items_data:
         try:
             data = json.loads(item_row[1])
@@ -241,16 +253,9 @@ def _calc_drink_dessert_rankings(items_data):
         cat = str(data.get('商品中类', '')).strip()
         if cat not in DRINK_DESSERT_CATS:
             continue
-        oid = str(data.get('订单号', ''))
-        code = str(data.get('商品编码', ''))
         name = str(data.get('商品名称', ''))
-        key = (oid, code, name)
-        if key in seen:
-            continue
-        seen.add(key)
-        qty = float(data.get('数量', 0) or 0)
-        rev = float(data.get('菜品收入', -1) or -1)
-        if qty <= 0 or rev <= 0:
+        qty = _item_qty(data)
+        if qty <= 0 or not _is_positive_revenue_item(data):
             continue
         if name not in dish_info:
             dish_info[name] = {'qty': 0, 'cat': cat}
@@ -346,11 +351,7 @@ def compute_comparison(db_manager, period_info, comparison_info, mode, store_nam
         ('会员', '营业额'),
     ]
 
-    for cat, metric in op_labels:
-        cur = current_overview.get(cat, {}).get(metric, 0)
-        ring = ringbi_overview.get(cat, {}).get(metric) if ringbi_overview else None
-        tong = tongbi_overview.get(cat, {}).get(metric) if tongbi_overview else None
-
+    def _append_op_row(label, metric, cur, ring, tong):
         if metric == '营业额':
             cur_str = _fmt_currency(cur)
             ring_diff, ring_pct = _fmt_change(cur, ring)
@@ -368,15 +369,49 @@ def compute_comparison(db_manager, period_info, comparison_info, mode, store_nam
             tong_diff = f"{cur - tong:+,.0f}" if tong is not None else '-'
             tong_pct = _fmt_pct((cur - tong) / tong * 100) if tong and tong > 0 else '-'
 
-        label = cat.replace('|', ' ')
         result['operational'].append({
-            'label': f"{label} {metric}",
+            'label': label,
             'current': cur_str,
             'ringbi_diff': ring_diff,
             'ringbi_pct': ring_pct,
             'tongbi_diff': tong_diff,
             'tongbi_pct': tong_pct,
         })
+
+    current_desk_revenue = current_overview.get('整体', {}).get('营业额', 0)
+    ringbi_desk_revenue = ringbi_overview.get('整体', {}).get('营业额') if ringbi_overview else None
+    tongbi_desk_revenue = tongbi_overview.get('整体', {}).get('营业额') if tongbi_overview else None
+    current_total_revenue = db_manager.get_total_revenue_for_period(current_start, current_end, store_name)
+    ringbi_total_revenue = (
+        db_manager.get_total_revenue_for_period(comparison_info['ringbi_start'], comparison_info['ringbi_end'], store_name)
+        if ringbi_overview else None
+    )
+    tongbi_total_revenue = (
+        db_manager.get_total_revenue_for_period(comparison_info['tongbi_start'], comparison_info['tongbi_end'], store_name)
+        if tongbi_overview else None
+    )
+    current_excluded_revenue = current_total_revenue - current_desk_revenue
+    ringbi_excluded_revenue = (
+        ringbi_total_revenue - ringbi_desk_revenue
+        if ringbi_total_revenue is not None and ringbi_desk_revenue is not None else None
+    )
+    tongbi_excluded_revenue = (
+        tongbi_total_revenue - tongbi_desk_revenue
+        if tongbi_total_revenue is not None and tongbi_desk_revenue is not None else None
+    )
+
+    _append_op_row('整体营业额', '营业额', current_total_revenue, ringbi_total_revenue, tongbi_total_revenue)
+    _append_op_row('堂食分桌总营业额', '营业额', current_desk_revenue, ringbi_desk_revenue, tongbi_desk_revenue)
+    _append_op_row('自取外卖单、吧台及零食购买团体、第三方平台外卖单合计', '营业额', current_excluded_revenue, ringbi_excluded_revenue, tongbi_excluded_revenue)
+
+    for cat, metric in op_labels:
+        if cat == '整体' and metric == '营业额':
+            continue
+        cur = current_overview.get(cat, {}).get(metric, 0)
+        ring = ringbi_overview.get(cat, {}).get(metric) if ringbi_overview else None
+        tong = tongbi_overview.get(cat, {}).get(metric) if tongbi_overview else None
+        label = cat.replace('|', ' ')
+        _append_op_row(f"{label} {metric}", metric, cur, ring, tong)
 
     # ── 2. Dish rankings ──
     # Determine target dishes based on store
@@ -390,14 +425,14 @@ def compute_comparison(db_manager, period_info, comparison_info, mode, store_nam
             "富顺鸡丝凉面", "古法干烧鱼(江团)", "古法干烧鱼(鲈鱼)", "富顺荤豆花",
             "206省道半汤牛蛙", "酸菜煸炒土豆片", "香菜回锅茄子", "火爆腰花",
             "炝炒莲花白菜", "金阳青花椒辣子鸡", "鱼香梅花肉丝", "文庙担担面",
-            "茂萱婆婆芽菜包", "五指毛桃白芸豆猪肚三年老鸡汤(盅)",
+            "茂萱婆婆芽菜包", "百合蜜枣无花果排骨汤",
         ]
 
-    items_current = db_manager.get_items_for_period(current_start, current_end, store_name)
-    items_ringbi = db_manager.get_items_for_period(
+    items_current = db_manager.get_all_items_for_period(current_start, current_end, store_name)
+    items_ringbi = db_manager.get_all_items_for_period(
         comparison_info['ringbi_start'], comparison_info['ringbi_end'], store_name
     )
-    items_tongbi = db_manager.get_items_for_period(
+    items_tongbi = db_manager.get_all_items_for_period(
         comparison_info['tongbi_start'], comparison_info['tongbi_end'], store_name
     )
 

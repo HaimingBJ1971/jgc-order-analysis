@@ -7,8 +7,11 @@ from datetime import datetime
 # Add current dir to path
 current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, current_dir)
+_order_root = os.path.join(current_dir, '..')
+sys.path.insert(0, os.path.abspath(_order_root))
 
 from takeaway_loader import load_takeaway_excel
+from ingest_validator import validate_takeaway_excel
 from takeaway_stats import (
     get_completed_orders, get_cancelled_orders, compute_summary_dict,
     calculate_store_comparison, calculate_daily_trends, calculate_platform_stats,
@@ -102,6 +105,12 @@ def main():
     all_dfs = []
     for f in args.files:
         print(f"  - 正在读取: {os.path.basename(f)}")
+        v = validate_takeaway_excel(f, strict_dates=False)
+        if not v.ok:
+            for e in v.errors:
+                print(f"    ERROR: {e}")
+            print("\n请修正 Excel 后重新提交，再执行入库。")
+            raise SystemExit(1)
         try:
             df_file = load_takeaway_excel(f, force_store=args.store)
             all_dfs.append(df_file)
