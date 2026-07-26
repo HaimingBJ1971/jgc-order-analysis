@@ -651,6 +651,50 @@ def _validate_closure(gs, total_revenue, total_people, store_name):
             print(f'    ⚠ {e}')
 
 
+MEMBER_CATEGORY_LABELS = [
+    '乐享卡/纯储值卡消费（无折扣会员卡）',
+    '折扣会员卡消费（有折扣会员卡）',
+    '其他会员消费（非卡支付但关联会员）',
+    '普通非会员消费（无会员信息）',
+]
+
+
+def classify_member_consumption(gs, orders_with_group):
+    """按统计消费团体互斥划分会员及卡消费类型，并校验数量闭合。"""
+    if '总优惠金额' not in orders_with_group.columns:
+        raise ValueError('会员及卡消费类型判定缺少 POS 标准列：总优惠金额')
+    order_lookup = {
+        str(row['订单号']): row
+        for _, row in orders_with_group.iterrows()
+    }
+
+    def _valid_member(value):
+        return str(value).strip() not in ('', '-', 'nan', 'None')
+
+    def _classify(order_ids):
+        rows = [order_lookup[str(oid)] for oid in order_ids if str(oid) in order_lookup]
+        has_member_card = any('会员卡' in str(row.get('支付方式', '')) for row in rows)
+        discounts = [pd.to_numeric(row.get('总优惠金额', 0), errors='coerce') for row in rows]
+        discount = sum(0 if pd.isna(value) else float(value) for value in discounts)
+        has_member = any(
+            _valid_member(row.get('会员姓名', '')) or _valid_member(row.get('会员手机号', ''))
+            for row in rows
+        )
+        if has_member_card:
+            return MEMBER_CATEGORY_LABELS[0] if abs(float(discount)) < 0.005 else MEMBER_CATEGORY_LABELS[1]
+        if has_member:
+            return MEMBER_CATEGORY_LABELS[2]
+        return MEMBER_CATEGORY_LABELS[3]
+
+    result = gs.copy()
+    result['会员及卡消费类型'] = result['包含订单'].apply(_classify)
+    result['是否会员'] = result['会员及卡消费类型'] != MEMBER_CATEGORY_LABELS[3]
+    counts = result['会员及卡消费类型'].value_counts().reindex(MEMBER_CATEGORY_LABELS, fill_value=0)
+    if int(counts.sum()) != len(result):
+        raise ValueError(f'会员及卡消费类型数量不闭合：分类合计 {int(counts.sum())}，统计消费团体数 {len(result)}')
+    return result, counts
+
+
 def generate_pdf_report(gs, group_items, stats, items_df, store_name, target_date, output_path, unrecognized=None):
     """生成统计分析 + 索引表 + 逐团体详情的 PDF"""
     page = A3
@@ -836,6 +880,29 @@ def generate_pdf_report(gs, group_items, stats, items_df, store_name, target_dat
     story.append(order_detail_table)
     formula_style = ParagraphStyle('Formula', parent=normal_style, fontSize=9, textColor=colors.darkgrey, leading=12)
     story.append(Paragraph('<b>计算公式：</b>合并后消费团体数 = 原始订单数 − 外卖 − 非堂食 − 免单(零收入) − 被合并；统计消费团体数 = 合并后团体数 − 零食 − 打包 − 零散 − 吧台', formula_style))
+    member_counts = gs['会员及卡消费类型'].value_counts().reindex(MEMBER_CATEGORY_LABELS, fill_value=0)
+    member_total = int(member_counts.sum())
+    member_data = [['会员及卡消费类型（判定口径）', '团体数', '占总团体比']]
+    for label in MEMBER_CATEGORY_LABELS:
+        count = int(member_counts[label])
+        member_data.append([label, f'{count} 团', f'{count / member_total * 100:.2f}%' if member_total else '0.00%'])
+    member_data.append(['= 统计消费团体数（全部）', f'{member_total} 团', '100.00%' if member_total else '0.00%'])
+    member_table = Table(member_data, colWidths=[7.5*cm, 2.2*cm, 2.5*cm])
+    member_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2c3e50')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+        ('ALIGN', (0, 1), (0, -1), 'LEFT'),
+        ('ALIGN', (1, 1), (-1, -1), 'RIGHT'),
+        ('FONTNAME', (0, 0), (-1, -1), CHINESE_FONT),
+        ('FONTSIZE', (0, 0), (-1, -1), 9),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.whitesmoke, colors.white]),
+        ('BACKGROUND', (0, -1), (-1, -1), colors.lightgrey),
+    ]))
+    story.append(Spacer(1, 0.35 * cm))
+    story.append(member_table)
+    story.append(Paragraph('<b>判定规则：</b>1. 乐享卡/纯储值卡：支付方式含“会员卡”且总优惠金额合计为 0；2. 折扣会员卡：支付方式含“会员卡”且总优惠金额合计非 0；3. 其他会员：支付方式不含“会员卡”但有关联会员姓名/手机号。', formula_style))
     story.append(Spacer(1, 0.5 * cm))
 
     # 三、客单价区间分布
@@ -1338,7 +1405,7 @@ def generate_pdf_report(gs, group_items, stats, items_df, store_name, target_dat
 # ── Markdown / Excel 输出 ─────────────────────────────────────────
 
 
-def generate_markdown_report(gs, store_name, target_date, output_path, unrecognized, items_df):
+def generate_markdown_report(gs, stats, store_name, target_date, output_path, unrecognized, items_df):
     """生成结论先行的 Markdown 报告"""
     total = len(gs)
     visited = len(gs[gs['桌访状态'] == '已桌访'])
@@ -1355,7 +1422,29 @@ def generate_markdown_report(gs, store_name, target_date, output_path, unrecogni
     if len(unrecognized) > 0:
         lines.append(f'- 桌访中未识别订单：**{len(unrecognized)}** 条')
 
-    lines += ['', '## 二、已桌访的消费团体', '']
+    lines += ['', '## 二、订单数量明细', '',
+              '| 项目 | 数量 |', '|------|------|',
+              f"| 原始订单数（含外卖） | {stats.get('原始订单数', 0)} |",
+              f"| - 外卖（外点自取）订单数 | {stats.get('外点自取订单数', 0)} |",
+              f"| - 非堂食订单数 | {stats.get('非堂食订单数', 0)} |",
+              f"| - 免单（零收入）订单数 | {stats.get('免单订单行数(已剔除)', 0)} |",
+              f"| - 被合并的订单数（含小单和零食单） | {stats.get('被合并的订单数', 0)} |",
+              f"| = 合并后消费团体数 | {stats.get('合并后消费团体数', 0)} |",
+              f"| - 零食购买团体数 | {stats.get('零食购买团体数', 0)} 团（{stats.get('零食购买订单数', 0)} 单） |",
+              f"| - 打包用品团体数 | {stats.get('打包用品团体数', 0)} 团（{stats.get('打包用品订单数', 0)} 单） |",
+              f"| - 零散小单团体数 | {stats.get('零散小单团体数', 0)} 团（{stats.get('零散小单订单数', 0)} 单） |",
+              f"| - 吧台团体数 | {stats.get('吧台团体数', 0)} 团（{stats.get('吧台订单数', 0)} 单） |",
+              f"| = 统计消费团体数 | {stats.get('统计订单数', total)} |", '',
+              '**计算公式：** 合并后消费团体数 = 原始订单数 − 外卖 − 非堂食 − 免单（零收入）− 被合并；统计消费团体数 = 合并后团体数 − 零食 − 打包 − 零散 − 吧台。', '',
+              '| 会员及卡消费类型（判定口径） | 团体数 | 占总团体比 |',
+              '|------|------:|------:|']
+    member_counts = gs['会员及卡消费类型'].value_counts().reindex(MEMBER_CATEGORY_LABELS, fill_value=0)
+    for label in MEMBER_CATEGORY_LABELS:
+        count = int(member_counts[label])
+        lines.append(f'| {label} | {count} 团 | {count / total * 100:.2f}% |' if total else f'| {label} | 0 团 | 0.00% |')
+    lines += [f'| **= 统计消费团体数（全部）** | **{total} 团** | **{"100.00%" if total else "0.00%"}** |', '',
+              '**判定规则：** 1. 乐享卡/纯储值卡：支付方式含“会员卡”且总优惠金额合计为 0；2. 折扣会员卡：支付方式含“会员卡”且总优惠金额合计非 0；3. 其他会员：支付方式不含“会员卡”但有关联会员姓名/手机号。', '',
+              '## 三、已桌访的消费团体', '']
     visited_df = gs[gs['桌访状态'] == '已桌访'].sort_values(['桌台', '开始'])
     if not visited_df.empty:
         lines.append('| 桌台 | 首单(末8位) | 时间 | 人数 | 总额 | 人均 | 开单人 | 结账人 | 桌访人 | 疑似异常 |')
@@ -1365,7 +1454,7 @@ def generate_markdown_report(gs, store_name, target_date, output_path, unrecogni
             anomaly = str(r.get('异常标记', ''))
             lines.append(f"| {r['桌台']} | ...{str(r['首单订单号'])[-8:]} | {t} | {int(r['团体人数'])} | ¥{r['团体总额']:.0f} | ¥{r['人均消费']:.0f} | {r.get('开单人','')} | {r.get('结账人','')} | {r.get('桌访人','')} | {anomaly if anomaly else '-'} |")
 
-    lines += ['', '## 三、未桌访的消费团体（按金额降序）', '']
+    lines += ['', '## 四、未桌访的消费团体（按金额降序）', '']
     uncovered_df = gs[gs['桌访状态'] == '未桌访'].sort_values('团体总额', ascending=False)
     if not uncovered_df.empty:
         lines.append('| 桌台 | 首单(末8位) | 时间 | 人数 | 总额 | 人均 | 开单人 | 结账人 | 备注 | 疑似异常 |')
@@ -1378,8 +1467,8 @@ def generate_markdown_report(gs, store_name, target_date, output_path, unrecogni
             anomaly = str(r.get('异常标记', ''))
             lines.append(f"| {r['桌台']} | ...{str(r['首单订单号'])[-8:]} | {t} | {int(r['团体人数'])} | ¥{r['团体总额']:.0f} | ¥{r['人均消费']:.0f} | {r.get('开单人','')} | {r.get('结账人','')} | {remark} | {anomaly if anomaly else '-'} |")
 
-    # 四、开单人统计
-    lines += ['', '## 四、开单人统计', '']
+    # 五、开单人统计
+    lines += ['', '## 五、开单人统计', '']
     opener_clean = gs['开单人'].dropna().astype(str).str.strip()
     opener_clean = opener_clean[opener_clean != '']
     opener_counts = opener_clean.value_counts()
@@ -1393,8 +1482,8 @@ def generate_markdown_report(gs, store_name, target_date, output_path, unrecogni
     total_amt = opener_amounts.sum()
     lines.append(f'| **合计** | **{opener_counts.sum()}** | **¥{total_amt:,.2f}** |')
 
-    # 五、桌访人统计
-    lines += ['', '## 五、桌访人统计', '']
+    # 六、桌访人统计
+    lines += ['', '## 六、桌访人统计', '']
     waiter_all = []
     for val in gs['桌访人'].dropna().astype(str).str.strip():
         if val:
@@ -1408,8 +1497,8 @@ def generate_markdown_report(gs, store_name, target_date, output_path, unrecogni
 
     is_baoli_md = '保利' in str(store_name)
 
-    # 六、重点菜品销售统计
-    lines += ['', '## 六、重点菜品销售统计', '']
+    # 七、重点菜品销售统计
+    lines += ['', '## 七、重点菜品销售统计', '']
     lines.append('| 菜品名称 | 销售份数 |')
     lines.append('|----------|----------|')
     md_dish_stats = _compute_baoli_dish_stats(items_df) if is_baoli_md else compute_dish_stats(items_df)
@@ -1418,7 +1507,7 @@ def generate_markdown_report(gs, store_name, target_date, output_path, unrecogni
 
     # 七、重点新品销售统计 / 保利店午晚热销统计
     if is_baoli_md:
-        lines += ['', '## 七、午晚热销统计', '']
+        lines += ['', '## 八、午晚热销统计', '']
         lunch_top, dinner_top = compute_lunch_dinner_top5(items_df, gs)
         lines += ['', '### 午市（<16:00）Top 6', '']
         lines.append('| 菜品名称 | 销售份数 |')
@@ -1435,14 +1524,14 @@ def generate_markdown_report(gs, store_name, target_date, output_path, unrecogni
         if not dinner_top:
             lines.append('| - | 0 |')
     else:
-        lines += ['', '## 七、重点新品销售统计', '']
+        lines += ['', '## 八、重点新品销售统计', '']
         lines.append('| 商品名称 | 销售份数 |')
         lines.append('|----------|----------|')
         for name, qty in compute_new_item_stats(items_df):
             lines.append(f'| {name} | {qty} |')
 
     if len(unrecognized) > 0:
-        lines += ['', '## 八、未匹配桌访记录', '',
+        lines += ['', '## 九、未匹配桌访记录', '',
                   '以下桌访记录因缺少订单号，无法关联到具体消费团体：', '',
                   '| 序号 | 服务员 | 创建时间 | 桌台号 | 就餐人数 | 支付金额 | 下单时间 | 会员状态 | 语音转录 |',
                   '|------|--------|----------|--------|----------|----------|----------|----------|----------|']
@@ -1478,7 +1567,7 @@ def generate_markdown_report(gs, store_name, target_date, output_path, unrecogni
             lines.append(f'| {k} | {waiter} | {create_time} | {table_no} | {people} | {amount} | {order_time} | {member} | {transcript} |')
         lines.append('')
 
-    lines += ['', '## 九、数据质量说明', '',
+    lines += ['', '## 十、数据质量说明', '',
               f'- 消费团体数: {total}',
               f'- 桌访覆盖率: {coverage:.1f}%', '']
 
@@ -1572,15 +1661,11 @@ def main():
     for _, r in gs[gs['异常标记'] != ''].iterrows():
         print(f'    {r["桌台"]} | ...{str(r["首单订单号"])[-8:]} | {r["异常标记"]}')
 
-    # Step 4.7: 会员/非会员分类
-    order_member_map = {}
-    if '会员姓名' in orders_with_group.columns:
-        for _, r in orders_with_group.iterrows():
-            mem = str(r.get('会员姓名', '')).strip()
-            order_member_map[str(r['订单号'])] = mem not in ('', '-', 'nan', 'None')
-    gs['是否会员'] = gs['包含订单'].apply(
-        lambda oids: any(order_member_map.get(str(oid), False) for oid in oids)
-    )
+    # Step 4.7: 会员及卡消费类型（四类互斥，数量必须闭合）
+    gs, member_counts = classify_member_consumption(gs, orders_with_group)
+    print('  会员及卡消费类型: ' + '；'.join(
+        f'{label} {int(member_counts[label])} 团' for label in MEMBER_CATEGORY_LABELS
+    ))
 
     # Step 5: 生成报告
     date_str = target_date.replace('-', '') if target_date else datetime.now().strftime('%Y%m%d')
@@ -1595,7 +1680,7 @@ def main():
 
     print(f'\n[5/5] 生成 Markdown...')
     md_path = os.path.join(output_dir, f'订单桌访合并_{date_str}{store_suffix}.md')
-    generate_markdown_report(gs, store_name or '未知', report_label or '未知', md_path, csv_unrecognized, items_clean)
+    generate_markdown_report(gs, stats, store_name or '未知', report_label or '未知', md_path, csv_unrecognized, items_clean)
 
     print(f'\n完成！')
     print(f'  PDF: {pdf_path}')

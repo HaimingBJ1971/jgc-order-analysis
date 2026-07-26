@@ -84,8 +84,8 @@ class TakeawayDatabaseManager:
 
     def insert_takeaway_orders(self, df, source_file: str) -> int:
         """
-        Insert parsed takeaway orders. Duplicate entries are ignored.
-        Returns the count of successfully inserted new rows.
+        Upsert parsed takeaway orders by business key.
+        Returns the count of rows inserted or updated.
         """
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         count = 0
@@ -110,25 +110,17 @@ class TakeawayDatabaseManager:
             )
             
             try:
-                self.conn.execute(
-                    """INSERT OR IGNORE INTO takeaway_orders
+                cursor = self.conn.execute(
+                    """INSERT OR REPLACE INTO takeaway_orders
                        (takeaway_order_id, store_name, order_source, date, status, raw_data, source_file, ingest_time)
                        VALUES (?,?,?,?,?,?,?,?)""",
                     (order_id, store_name, source, date, status, raw_json, source_file, now)
                 )
-                # Check if it was actually inserted (changes > 0)
-                # note: self.conn.total_changes is cumulative, we check if changes increased or check total changes
-                # But it's simpler to rely on self.conn.execute and count using cursor or row changes
-                # sqlite cursor.rowcount shows rows affected
-                pass
+                count += max(cursor.rowcount, 0)
             except Exception:
                 continue
                 
         self.conn.commit()
-        
-        # To find exactly how many new records were written, we query or track total changes
-        # But wait, a cleaner way to compute count is to count how many rows are in the DB before vs after
-        # Let's count them
         return count
 
     def upsert_daily_overview(self, rows: list):

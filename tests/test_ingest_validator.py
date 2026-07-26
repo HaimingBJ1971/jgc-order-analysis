@@ -1,5 +1,6 @@
 """Tests for POS/takeaway ingest validation."""
 
+import importlib.util
 import sys
 from pathlib import Path
 
@@ -12,6 +13,7 @@ import pandas as pd  # noqa: E402
 
 from ingest_validator import (  # noqa: E402
     _check_columns,
+    _check_filename_store,
     allowed_missing_dates,
     load_closure_dates,
     load_schema,
@@ -83,3 +85,36 @@ def test_check_columns_placeholder_dash_is_value():
     df = pd.DataFrame({"订单号": ["1", "2"], "会员手机号": ["-", "138"]})
     errs = _check_columns(df, "店内订单明细", "订单号", req, set())
     assert errs == [], errs
+
+
+def test_filename_store_mismatch_is_rejected():
+    errs = _check_filename_store(Path("万荷店内订单明细.xlsx"), "保利店", "POS")
+
+    assert errs
+    assert "文件名门店为 万荷店" in errs[0]
+    assert "Excel 内容门店为 保利店" in errs[0]
+
+
+def test_direct_single_store_ingest_validates_before_opening_db(monkeypatch, tmp_path: Path):
+    module_path = ORDER_ROOT / "周期对比分析" / "ingest_store_stats.py"
+    spec = importlib.util.spec_from_file_location("ingest_store_stats_for_validation_test", module_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+
+    class FailedValidation:
+        store_name = "万荷店"
+
+        def raise_if_failed(self, *, prefix: str = "") -> None:
+            raise SystemExit(f"{prefix}: validation failed")
+
+    monkeypatch.setattr(module, "validate_pos_excel", lambda _path: FailedValidation())
+
+    def fail_if_db_opened(_path):
+        raise AssertionError("DatabaseManager should not be opened when validation fails")
+
+    monkeypatch.setattr(module, "DatabaseManager", fail_if_db_opened)
+
+    with pytest.raises(SystemExit, match="validation failed"):
+        module.ingest("bad.xlsx", "万荷店", str(tmp_path / "test.db"), None, None)

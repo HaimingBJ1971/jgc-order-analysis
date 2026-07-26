@@ -204,11 +204,13 @@ def generate_comparison_pdf(output_path, period_info, comparison_info, comp_data
     ring_dishes_dict = dict(comp_data['dishes_ringbi'])
     tong_dishes_dict = dict(comp_data['dishes_tongbi'])
 
-    dish_header = ['菜品名称', '本期销量', '环比销量', '变化', '变化率', '同比销量', '变化', '变化率']
+    current_group_count = int(comp_data.get('current_group_count') or 0)
+    dish_header = ['菜品名称', '本期销量', '总团数', '点购率', '环比销量', '变化', '变化率', '同比销量', '变化', '变化率']
     dish_data = [dish_header]
     for name, qty in cur_dishes:
         ring_qty = ring_dishes_dict.get(name)
         tong_qty = tong_dishes_dict.get(name)
+        order_rate_str = f'{qty / current_group_count * 100:.1f}%' if current_group_count > 0 else '-'
 
         if ring_qty is not None and ring_qty > 0:
             ring_diff = qty - ring_qty
@@ -235,6 +237,8 @@ def generate_comparison_pdf(output_path, period_info, comparison_info, comp_data
         dish_data.append([
             _p(name, cell_l),
             _p(str(qty), cell_c),
+            _p(str(current_group_count) if current_group_count > 0 else '-', cell_c),
+            _p(order_rate_str, cell_c),
             _p(str(ring_qty) if ring_qty is not None else '-', cell_c),
             _p_color(ring_diff_str, ring_color, cell_c),
             _p_color(ring_rate_str, ring_color, cell_c),
@@ -243,7 +247,11 @@ def generate_comparison_pdf(output_path, period_info, comparison_info, comp_data
             _p_color(tong_rate_str, tong_color, cell_c),
         ])
 
-    dish_table = Table(dish_data, colWidths=[4.5*cm, 1.6*cm, 1.6*cm, 1.4*cm, 1.6*cm, 1.6*cm, 1.4*cm, 1.6*cm], repeatRows=1)
+    dish_table = Table(
+        dish_data,
+        colWidths=[3.6*cm, 1.3*cm, 1.25*cm, 1.35*cm, 1.3*cm, 1.15*cm, 1.35*cm, 1.3*cm, 1.15*cm, 1.35*cm],
+        repeatRows=1,
+    )
     dish_table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2c3e50')),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
@@ -262,7 +270,8 @@ def generate_comparison_pdf(output_path, period_info, comparison_info, comp_data
         '<font size="7" color="#666666">注：本表销量采用 POS 店内全量正收入口径，'
         '包含自取外卖单、吧台及零食购买团体；赠送、免单、全额优惠等菜品收入≤0的商品不计入销量。'
         '不得用“销售数量-赠菜数量”替代正收入销量。'
-        '第三方平台外卖若无商品级明细，不纳入商品销量排行。</font>',
+        '第三方平台外卖若无商品级明细，不纳入商品销量排行。'
+        '点购率=本期销量/本期统计消费团体数，表示份数相对到店团体数的强度，非去重桌数占比。</font>',
         normal_style,
     ))
 

@@ -241,32 +241,50 @@ class DatabaseManager:
 
     # ── Context Loading (for cross-boundary merge) ──────────
 
-    def load_context_orders(self, table_names: set, date_range: tuple) -> list:
+    def load_context_orders(
+        self,
+        table_names: set,
+        date_range: tuple,
+        exclude_scopes: set[tuple[str, str]] | None = None,
+    ) -> list:
         """
         Load existing orders from DB for given tables within date_range ±1 day,
         returned as list of dicts (raw order data) for merge context.
+
+        Current snapshot scopes are excluded so corrected or deleted orders from the
+        same store/date cannot leak back into the recomputed groups as stale context.
         """
+        from store_utils import infer_order_store
+
         min_date, max_date = date_range
         if min_date is None or max_date is None:
             return []
 
         min_dt = datetime.strptime(min_date, "%Y-%m-%d") - timedelta(days=1)
         max_dt = datetime.strptime(max_date, "%Y-%m-%d") + timedelta(days=1)
+        excluded = exclude_scopes or set()
 
         context_orders = []
         for table in table_names:
             rows = self.conn.execute(
-                """SELECT o.原始数据 FROM orders o
+                """SELECT o.原始数据, o.source_file FROM orders o
                    INNER JOIN groups g ON o.订单号 = g.first_order_id
                    WHERE g.table_name = ?
                      AND g.group_date BETWEEN ? AND ?""",
                 (table, min_dt.strftime("%Y-%m-%d"), max_dt.strftime("%Y-%m-%d"))
             ).fetchall()
-            for (raw_json,) in rows:
+            for raw_json, source_file in rows:
                 try:
-                    context_orders.append(json.loads(raw_json))
+                    data = json.loads(raw_json)
                 except (json.JSONDecodeError, TypeError):
                     continue
+                scope = (
+                    self._raw_order_date(data),
+                    infer_order_store(data, source_file or ""),
+                )
+                if scope in excluded:
+                    continue
+                context_orders.append(data)
         return context_orders
 
     # ── Write Raw Data ──────────────────────────────────────
@@ -282,6 +300,46 @@ class DatabaseManager:
             if k not in cls._INTERNAL_ROW_KEYS
         }
         return json.dumps(payload, ensure_ascii=False, default=str)
+
+    def snapshot_scope_pairs(self, orders_df) -> set[tuple[str, str]]:
+        """Return authoritative (business date, store) scopes for a complete POS snapshot."""
+        from store_utils import infer_order_store
+
+        scopes: set[tuple[str, str]] = set()
+        for _, row in orders_df.iterrows():
+            order_id = str(row.get("订单号", "")).strip()
+            if not order_id.isdigit():
+                continue
+            data = row.to_dict()
+            order_date = self._raw_order_date(data)
+            store_name = infer_order_store(data)
+            if not order_date:
+                raise ValueError(f"订单 {order_id} 无法识别营业日，拒绝替换 POS 快照")
+            if store_name == "未知门店":
+                raise ValueError(f"订单 {order_id} 无法从门店名称识别门店，拒绝替换 POS 快照")
+            scopes.add((order_date, store_name))
+        if not scopes:
+            raise ValueError("当前 POS 快照没有可识别的门店营业日范围")
+        return scopes
+
+    def _insert_order_rows(self, orders_df, source_file: str, now: str) -> int:
+        count = 0
+        for _, row in orders_df.iterrows():
+            order_id = str(row["订单号"]).strip()
+            if not order_id.isdigit():
+                continue
+            row_source = (
+                str(row.get("source_file", source_file))
+                if "source_file" in orders_df.columns
+                else source_file
+            )
+            raw_json = self.row_to_raw_json(row)
+            self.conn.execute(
+                "INSERT INTO orders (订单号, 原始数据, source_file, ingest_time) VALUES (?,?,?,?)",
+                (order_id, raw_json, row_source, now),
+            )
+            count += 1
+        return count
 
     def insert_orders(self, orders_df, source_file: str) -> int:
         """Insert orders into DB. Returns count of actually inserted rows."""
@@ -322,12 +380,12 @@ class DatabaseManager:
         self.conn.commit()
         return count
 
-    def insert_items(self, items_df, source_file: str) -> int:
-        """Upsert POS item lines by row-level key. Returns count written."""
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    def _insert_item_rows(self, items_df, source_file: str, now: str, strict: bool = False) -> int:
         count = 0
         for row_index, row in items_df.iterrows():
             order_id = str(row["订单号"])
+            if not order_id.isdigit():
+                continue
             item_code = str(row.get("商品编码", ""))
             item_name = str(row.get("商品名称", ""))
             row_source = str(row.get("source_file", source_file)) if "source_file" in items_df.columns else source_file
@@ -335,6 +393,15 @@ class DatabaseManager:
             item_line_key = self.item_line_key(
                 row.to_dict(), order_id, item_code, item_name, row_index
             )
+            if strict:
+                self.conn.execute(
+                    "INSERT INTO items "
+                    "(订单号, 商品编码, 商品名称, item_line_key, 原始数据, source_file, ingest_time) "
+                    "VALUES (?,?,?,?,?,?,?)",
+                    (order_id, item_code, item_name, item_line_key, raw_json, row_source, now)
+                )
+                count += 1
+                continue
             try:
                 self.conn.execute(
                     "INSERT OR REPLACE INTO items "
@@ -345,8 +412,44 @@ class DatabaseManager:
                 count += 1
             except Exception:
                 continue
+        return count
+
+    def insert_items(self, items_df, source_file: str) -> int:
+        """Upsert POS item lines by row-level key. Legacy-compatible append path."""
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        count = self._insert_item_rows(items_df, source_file, now, strict=False)
         self.conn.commit()
         return count
+
+    def replace_items_for_orders(self, items_df, source_file: str) -> int:
+        """
+        Replace item snapshots for every valid order in items_df, then write current POS lines.
+
+        The uniqueness boundary is the order snapshot: repeated imports of the same order
+        must not leave item rows from older weekly/monthly/archive exports behind. Within the
+        current snapshot, POS row-level item_line_key is still preserved, so repeated same
+        products inside one order remain separate rows.
+        """
+        if items_df is None or items_df.empty:
+            return 0
+        order_ids = sorted({
+            str(oid).strip()
+            for oid in items_df["订单号"].dropna().tolist()
+            if str(oid).strip().isdigit()
+        })
+        if not order_ids:
+            return 0
+
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with self.conn:
+            for i in range(0, len(order_ids), 800):
+                chunk = order_ids[i:i + 800]
+                placeholders = ",".join("?" for _ in chunk)
+                self.conn.execute(
+                    f"DELETE FROM items WHERE 订单号 IN ({placeholders})",
+                    chunk,
+                )
+            return self._insert_item_rows(items_df, source_file, now, strict=True)
 
     def relabel_order_sources(self, order_ids: list, source_file: str) -> int:
         """Update source_file for existing orders (fix legacy mis-tagged rows)."""
@@ -362,7 +465,7 @@ class DatabaseManager:
         return self.conn.total_changes
 
     def relabel_item_sources(self, order_ids: list, source_file: str) -> int:
-        """Update source_file on item rows for given order IDs."""
+        """Legacy correction helper; do not call from normal ingest/report paths."""
         if not order_ids:
             return 0
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -376,46 +479,297 @@ class DatabaseManager:
 
     # ── Write Groups ────────────────────────────────────────
 
-    def insert_groups(self, groups_df) -> int:
-        """Insert aggregated groups. Skips existing. Returns count inserted."""
+    def _insert_group_rows(self, groups_df) -> int:
+        """Insert group rows strictly; any invalid row aborts the surrounding transaction."""
         count = 0
+        if groups_df is None or groups_df.empty:
+            return count
         for _, g in groups_df.iterrows():
-            try:
-                self.conn.execute(
-                    """INSERT OR IGNORE INTO groups
-                       (group_date, table_name, group_amount, order_revenue, order_count,
-                        start_time, end_time, guest_count, anchor_order_id, first_order_id,
-                        order_ids, per_person, is_member, area, meal_period,
-                        filter_status, opener)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    (
-                        str(g.get("_date", "")),
-                        str(g.get("桌台", "")),
-                        float(g.get("团体总额", 0) or 0),
-                        float(g.get("订单收入", 0) or 0),
-                        int(g.get("订单数", 0) or 0),
-                        str(g.get("开始", "")),
-                        str(g.get("结束", "")),
-                        float(g.get("团体人数", 0) or 0),
-                        str(g.get("主单订单号", "")),
-                        str(g.get("首单订单号", "")),
-                        json.dumps(
-                            g.get("包含订单", []) if isinstance(g.get("包含订单"), list)
-                            else [], ensure_ascii=False
-                        ),
-                        float(g.get("人均消费", 0) or 0),
-                        int(g.get("是否会员", False) or 0),
-                        str(g.get("_area", "")),
-                        str(g.get("_meal", "")),
-                        str(g.get("_filter_status", "kept")),
-                        str(g.get("_opener", "")),
-                    )
-                )
-                count += 1
-            except Exception:
-                continue
-        self.conn.commit()
+            self.conn.execute(
+                """INSERT INTO groups
+                   (group_date, table_name, group_amount, order_revenue, order_count,
+                    start_time, end_time, guest_count, anchor_order_id, first_order_id,
+                    order_ids, per_person, is_member, area, meal_period,
+                    filter_status, opener)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    str(g.get("_date", "")),
+                    str(g.get("桌台", "")),
+                    float(g.get("团体总额", 0) or 0),
+                    float(g.get("订单收入", 0) or 0),
+                    int(g.get("订单数", 0) or 0),
+                    str(g.get("开始", "")),
+                    str(g.get("结束", "")),
+                    float(g.get("团体人数", 0) or 0),
+                    str(g.get("主单订单号", "")),
+                    str(g.get("首单订单号", "")),
+                    json.dumps(
+                        g.get("包含订单", []) if isinstance(g.get("包含订单"), list)
+                        else [], ensure_ascii=False
+                    ),
+                    float(g.get("人均消费", 0) or 0),
+                    int(g.get("是否会员", False) or 0),
+                    str(g.get("_area", "")),
+                    str(g.get("_meal", "")),
+                    str(g.get("_filter_status", "kept")),
+                    str(g.get("_opener", "")),
+                ),
+            )
+            count += 1
         return count
+
+    def insert_groups(self, groups_df) -> int:
+        """Insert aggregated groups atomically; duplicate or invalid rows raise."""
+        with self.conn:
+            return self._insert_group_rows(groups_df)
+
+    @staticmethod
+    def _chunked(values: set[str] | list[int], size: int = 800):
+        items = list(values)
+        for index in range(0, len(items), size):
+            yield items[index:index + size]
+
+    def _delete_ids(self, table: str, column: str, values: set[str] | list[int]) -> None:
+        for chunk in self._chunked(values):
+            placeholders = ",".join("?" for _ in chunk)
+            self.conn.execute(
+                f"DELETE FROM {table} WHERE {column} IN ({placeholders})",
+                chunk,
+            )
+
+    def _existing_order_scopes(
+        self,
+        scopes: set[tuple[str, str]],
+    ) -> dict[str, tuple[str, str]]:
+        from store_utils import infer_order_store
+
+        result: dict[str, tuple[str, str]] = {}
+        rows = self.conn.execute(
+            "SELECT 订单号, 原始数据, source_file FROM orders"
+        ).fetchall()
+        for order_id, raw_json, source_file in rows:
+            try:
+                data = json.loads(raw_json)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            scope = (
+                self._raw_order_date(data),
+                infer_order_store(data, source_file or ""),
+            )
+            if scope in scopes:
+                result[str(order_id)] = scope
+        return result
+
+    def _group_ids_for_snapshot(
+        self,
+        scopes: set[tuple[str, str]],
+        affected_order_ids: set[str],
+        order_scope_map: dict[str, tuple[str, str]],
+    ) -> set[int]:
+        scope_dates = {day for day, _store in scopes}
+        group_ids: set[int] = set()
+        rows = self.conn.execute(
+            "SELECT id, group_date, first_order_id, order_ids FROM groups"
+        ).fetchall()
+        for group_id, group_date, first_order_id, order_ids_json in rows:
+            try:
+                order_ids = {
+                    str(order_id)
+                    for order_id in json.loads(order_ids_json or "[]")
+                }
+            except (json.JSONDecodeError, TypeError):
+                order_ids = set()
+            if first_order_id:
+                order_ids.add(str(first_order_id))
+            if order_ids & affected_order_ids:
+                group_ids.add(int(group_id))
+                continue
+            if str(group_date) not in scope_dates:
+                continue
+            if any(
+                (str(group_date), order_scope_map[order_id][1]) in scopes
+                for order_id in order_ids
+                if order_id in order_scope_map
+            ):
+                group_ids.add(int(group_id))
+        return group_ids
+
+    @staticmethod
+    def _group_order_ids(group) -> set[str]:
+        order_ids = group.get("包含订单", [])
+        if not isinstance(order_ids, list):
+            order_ids = []
+        result = {str(order_id) for order_id in order_ids}
+        for key in ("首单订单号", "主单订单号"):
+            value = str(group.get(key, "") or "")
+            if value:
+                result.add(value)
+        return result
+
+    def replace_pos_snapshot(
+        self,
+        orders_df,
+        items_df,
+        groups_df,
+        source_file: str,
+        stats_result: dict | None = None,
+    ) -> dict[str, int]:
+        """
+        Atomically replace complete POS snapshots by authoritative store + business date.
+
+        Stale orders absent from the current complete scope are removed together with
+        their item lines and groups. Existing groups touched by moved orders are removed
+        regardless of their old table/date, while same-named tables from another store
+        are preserved.
+        """
+        from store_utils import infer_order_store
+
+        scopes = self.snapshot_scope_pairs(orders_df)
+        incoming_order_ids = {
+            str(order_id).strip()
+            for order_id in orders_df["订单号"].dropna().tolist()
+            if str(order_id).strip().isdigit()
+        }
+        incoming_scope_map: dict[str, tuple[str, str]] = {}
+        for _, row in orders_df.iterrows():
+            order_id = str(row.get("订单号", "")).strip()
+            if not order_id.isdigit():
+                continue
+            data = row.to_dict()
+            incoming_scope_map[order_id] = (
+                self._raw_order_date(data),
+                infer_order_store(data),
+            )
+
+        item_order_ids = {
+            str(order_id).strip()
+            for order_id in items_df["订单号"].dropna().tolist()
+            if str(order_id).strip().isdigit()
+        } if items_df is not None and not items_df.empty else set()
+        unexpected_item_ids = item_order_ids - incoming_order_ids
+        if unexpected_item_ids:
+            sample = ", ".join(sorted(unexpected_item_ids)[:5])
+            raise ValueError(f"商品快照包含当前订单快照之外的订单号: {sample}")
+
+        existing_scope_map = self._existing_order_scopes(scopes)
+        existing_scope_ids = set(existing_scope_map)
+        stale_order_ids = existing_scope_ids - incoming_order_ids
+        affected_order_ids = existing_scope_ids | incoming_order_ids
+        order_scope_map = {**existing_scope_map, **incoming_scope_map}
+        group_ids_to_delete = self._group_ids_for_snapshot(
+            scopes,
+            affected_order_ids,
+            order_scope_map,
+        )
+
+        groups_to_insert = groups_df
+        if groups_df is not None and not groups_df.empty:
+            keep_mask = groups_df.apply(
+                lambda group: bool(
+                    self._group_order_ids(group) & incoming_order_ids
+                ),
+                axis=1,
+            )
+            groups_to_insert = groups_df[keep_mask].copy()
+
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with self.conn:
+            self._delete_ids("groups", "id", group_ids_to_delete)
+            self._delete_ids("items", "订单号", affected_order_ids)
+            self._delete_ids("orders", "订单号", affected_order_ids)
+            daily_rows_written = self._replace_daily_stats_for_scopes(
+                scopes,
+                stats_result,
+            )
+            orders_written = self._insert_order_rows(orders_df, source_file, now)
+            items_written = self._insert_item_rows(
+                items_df,
+                source_file,
+                now,
+                strict=True,
+            ) if items_df is not None and not items_df.empty else 0
+            groups_written = self._insert_group_rows(groups_to_insert)
+
+        return {
+            "orders_written": orders_written,
+            "items_written": items_written,
+            "groups_written": groups_written,
+            "stale_orders_removed": len(stale_order_ids),
+            "old_groups_removed": len(group_ids_to_delete),
+            "scope_days": len(scopes),
+            "daily_rows_written": daily_rows_written,
+        }
+
+    def _replace_daily_stats_for_scopes(
+        self,
+        scopes: set[tuple[str, str]],
+        stats_result: dict | None,
+    ) -> int:
+        """Replace all daily aggregates for snapshot scopes inside the caller transaction."""
+        if stats_result is None:
+            return 0
+
+        for table in (
+            "daily_overview",
+            "daily_order_counts",
+            "daily_buckets",
+        ):
+            for day, store_name in scopes:
+                self.conn.execute(
+                    f"DELETE FROM {table} WHERE date=? AND store_name=?",
+                    (day, store_name),
+                )
+
+        statements = {
+            "overview_rows": """
+                INSERT INTO daily_overview
+                (date, store_name, category, sub_category, 营业额, 百分比, 人数, 人均)
+                VALUES (?,?,?,?,?,?,?,?)
+            """,
+            "order_count_rows": """
+                INSERT INTO daily_order_counts
+                (date, store_name, 原始订单数, 外卖订单数, 非堂食订单数, 免单订单数,
+                 被合并订单数, 合并后消费团体数, 零食团体数, 打包团体数,
+                 零散小单团体数, 吧台团体数, 统计消费团体数)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            "bucket_rows": """
+                INSERT INTO daily_buckets
+                (date, store_name, bucket, 订单数, 占比)
+                VALUES (?,?,?,?,?)
+            """,
+        }
+        written = 0
+        for key, statement in statements.items():
+            rows = list(stats_result.get(key, []) or [])
+            unexpected = [
+                (str(row[0]), str(row[1]))
+                for row in rows
+                if (str(row[0]), str(row[1])) not in scopes
+            ]
+            if unexpected:
+                sample = ", ".join(f"{day}/{store}" for day, store in unexpected[:5])
+                raise ValueError(f"{key} 包含当前 POS 快照范围之外的日汇总: {sample}")
+            if rows:
+                self.conn.executemany(statement, rows)
+                written += len(rows)
+        return written
+
+    def replace_groups_for_scope(self, groups_df) -> int:
+        """Legacy compatibility wrapper: replace groups touched by incoming order IDs."""
+        if groups_df is None or groups_df.empty:
+            return 0
+        incoming_order_ids: set[str] = set()
+        for _, group in groups_df.iterrows():
+            incoming_order_ids.update(self._group_order_ids(group))
+        group_ids = self._group_ids_for_snapshot(
+            set(),
+            incoming_order_ids,
+            {},
+        )
+        with self.conn:
+            self._delete_ids("groups", "id", group_ids)
+            return self._insert_group_rows(groups_df)
 
     # ── Write/Update Daily Stats ────────────────────────────
 
@@ -745,8 +1099,15 @@ class DatabaseManager:
             return ""
         return text[:10].replace("/", "-")
 
+    @staticmethod
+    def _raw_order_revenue(data: dict) -> float:
+        try:
+            return float(data.get("订单收入") or data.get("菜品收入") or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
     def get_order_ids_for_period(self, start_date: str, end_date: str, store_name: str | None = None) -> set[str]:
-        """Return POS order IDs by raw order date and store, independent of group filtering."""
+        """Return positive-revenue POS order IDs by raw order date and store."""
         from store_utils import infer_store_from_pos_name, infer_store_from_source_file
 
         ids: set[str] = set()
@@ -759,8 +1120,7 @@ class DatabaseManager:
             date = self._raw_order_date(data)
             if not date or date < start_date or date > end_date:
                 continue
-            order_type = str(data.get("订单类型", "")).strip()
-            if order_type and order_type != "堂食":
+            if self._raw_order_revenue(data) <= 0:
                 continue
             if store_name:
                 raw_store = infer_store_from_pos_name(str(data.get("门店名称", "")))
@@ -785,10 +1145,7 @@ class DatabaseManager:
                 data = json.loads(row[0])
             except (json.JSONDecodeError, TypeError):
                 continue
-            try:
-                total += float(data.get("订单收入") or data.get("菜品收入") or 0)
-            except (TypeError, ValueError):
-                continue
+            total += self._raw_order_revenue(data)
         return total
 
     def _table_exists(self, table_name: str) -> bool:

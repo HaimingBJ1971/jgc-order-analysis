@@ -20,7 +20,7 @@ sys.modules[SPEC.name] = backfill
 SPEC.loader.exec_module(backfill)
 
 
-def test_archive_backfill_keeps_same_product_pos_lines_and_only_replaces_same_sequence(
+def test_archive_backfill_uses_selected_snapshot_instead_of_mixing_archive_packages(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -71,6 +71,58 @@ def test_archive_backfill_keeps_same_product_pos_lines_and_only_replaces_same_se
     orders_df, items_df = backfill.load_merged_archives([older, newer])
 
     assert len(orders_df) == 1
-    assert len(items_df) == 2
-    assert items_df["数量"].sum() == 14
-    assert sorted(items_df["序号"].tolist()) == [1, 2]
+    assert len(items_df) == 1
+    assert items_df.iloc[0]["source_file"] == newer.name
+    assert items_df["数量"].sum() == 11
+    assert items_df["序号"].tolist() == [1]
+
+
+def test_archive_backfill_uses_items_from_selected_order_snapshot_when_sequence_changes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    older = tmp_path / "万荷店内订单明细2026-01-01+00_00_00~2026-01-07+23_59_59.xlsx"
+    newer = tmp_path / "万荷店内订单明细2026-01-07+00_00_00~2026-01-14+23_59_59.xlsx"
+    older.touch()
+    newer.touch()
+
+    def fake_load_excel(path: str):
+        name = Path(path).name
+        if name == older.name:
+            orders = pd.DataFrame([{"订单号": "1001", "门店名称": "金谷仓家庭料理万荷餐厅"}])
+            items = pd.DataFrame(
+                [
+                    {
+                        "序号": 100672,
+                        "订单号": "1001",
+                        "商品编码": "SKU589",
+                        "商品名称": "杨梅马蹄气泡水",
+                        "菜品收入": 100,
+                    }
+                ]
+            )
+        else:
+            orders = pd.DataFrame([{"订单号": "1001", "门店名称": "金谷仓家庭料理万荷餐厅"}])
+            items = pd.DataFrame(
+                [
+                    {
+                        "序号": 14165,
+                        "订单号": "1001",
+                        "商品编码": "SKU589",
+                        "商品名称": "杨梅马蹄气泡水",
+                        "菜品收入": 120,
+                    }
+                ]
+            )
+        return orders, items
+
+    monkeypatch.setattr(backfill, "load_excel", fake_load_excel)
+
+    orders_df, items_df = backfill.load_merged_archives([older, newer])
+
+    assert len(orders_df) == 1
+    assert orders_df.iloc[0]["source_file"] == newer.name
+    assert len(items_df) == 1
+    assert items_df.iloc[0]["source_file"] == newer.name
+    assert int(items_df.iloc[0]["序号"]) == 14165
+    assert int(items_df.iloc[0]["菜品收入"]) == 120

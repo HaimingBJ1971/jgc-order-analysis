@@ -33,13 +33,13 @@ _lt_dir = os.path.join(os.path.dirname(__file__), '..', '长期订单分析')
 sys.path.insert(0, os.path.abspath(_lt_dir))
 
 from db_manager import DatabaseManager
-from store_utils import infer_order_store
 from daily_stats import compute_all_daily_stats, _area, _meal_period, _compute_member_status, _compute_opener
 
 from period_validator import validate_period, get_comparison_periods
 from comparator import compute_comparison
 from pdf_report import generate_comparison_pdf
 from word_report import generate_comparison_word
+from weekday_trend import generate_weekday_trend_reports
 
 
 def main():
@@ -160,33 +160,30 @@ def main():
 
     group_sum['_filter_status'] = group_sum.apply(_tag_status, axis=1)
 
-    # Write to DB
-    print("  写入数据库...")
-    source_file = os.path.basename(args.excel)
-    db.insert_orders(raw_orders, source_file)
-    db.insert_items(raw_items, source_file)
-    if store_name:
-        order_ids = [
-            str(row["订单号"])
-            for _, row in raw_orders.iterrows()
-            if infer_order_store(row.to_dict(), source_file) == store_name
-        ]
-        db.relabel_order_sources(order_ids, source_file)
-        db.relabel_item_sources(order_ids, source_file)
-    db.insert_groups(group_sum)
-
     # Compute and write daily stats (using tagged group_sum)
     stats_result = compute_all_daily_stats(
         group_sum, orders_with_group, pre_merge_daily,
         items_clean if not items_clean.empty else None,
         store_name=store_name,
     )
-    if stats_result['overview_rows']:
-        db.upsert_daily_overview(stats_result['overview_rows'])
-    if stats_result['order_count_rows']:
-        db.upsert_daily_order_counts(stats_result['order_count_rows'])
-    if stats_result['bucket_rows']:
-        db.upsert_daily_buckets(stats_result['bucket_rows'])
+    print("  写入数据库...")
+    source_file = os.path.basename(args.excel)
+    snapshot_result = db.replace_pos_snapshot(
+        raw_orders,
+        raw_items,
+        group_sum,
+        source_file,
+        stats_result=stats_result,
+    )
+    print(
+        "  快照写入完成："
+        f"订单 {snapshot_result['orders_written']}，"
+        f"商品 {snapshot_result['items_written']}，"
+        f"团体 {snapshot_result['groups_written']}，"
+        f"日汇总 {snapshot_result['daily_rows_written']}；"
+        f"移除旧订单 {snapshot_result['stale_orders_removed']}，"
+        f"旧团体 {snapshot_result['old_groups_removed']}"
+    )
     if stats_result['opener_rows']:
         db.upsert_daily_opener_stats(stats_result['opener_rows'])
 
@@ -198,7 +195,12 @@ def main():
     print(f"  环比: {comparison_info['ringbi_label']} ({comparison_info['ringbi_start']} ~ {comparison_info['ringbi_end']})")
     print(f"  同比: {comparison_info['tongbi_label']} ({comparison_info['tongbi_start']} ~ {comparison_info['tongbi_end']})")
 
-    comp_data = compute_comparison(db, period_info, comparison_info, args.mode, store_name)
+    try:
+        comp_data = compute_comparison(db, period_info, comparison_info, args.mode, store_name)
+    except ValueError as exc:
+        print(f"  [闭合校验失败] {exc}")
+        db.close()
+        raise SystemExit(1)
 
     if comp_data['data_quality']['ringbi_missing']:
         print(f"  [警告] 环比数据缺失")
@@ -218,6 +220,15 @@ def main():
     word_name = f'周期对比分析_{date_tag}_{store_name}.docx'
     word_path = os.path.join(args.output_dir, word_name)
     generate_comparison_word(word_path, period_info, comparison_info, comp_data, args.mode, store_name)
+
+    trend_xlsx_path, trend_pdf_path = generate_weekday_trend_reports(
+        args.db,
+        args.output_dir,
+        period_info['period_end'],
+        store_name=store_name,
+    )
+    print(f"周几半年趋势 Excel 已生成: {trend_xlsx_path}")
+    print(f"周几半年趋势 PDF 已生成: {trend_pdf_path}")
 
     db.close()
     print("\n完成！")

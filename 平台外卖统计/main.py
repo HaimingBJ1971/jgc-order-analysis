@@ -105,7 +105,7 @@ def main():
     all_dfs = []
     for f in args.files:
         print(f"  - 正在读取: {os.path.basename(f)}")
-        v = validate_takeaway_excel(f, strict_dates=False)
+        v = validate_takeaway_excel(f, strict_dates=bool(args.db))
         if not v.ok:
             for e in v.errors:
                 print(f"    ERROR: {e}")

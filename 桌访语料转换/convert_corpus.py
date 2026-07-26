@@ -4,10 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import calendar
 import re
 import sys
 from copy import copy
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -35,6 +36,7 @@ DATE_RANGE_RE = re.compile(
     r"(\d{4})-(\d{1,2})-(\d{1,2})_至_(\d{4})-(\d{1,2})-(\d{1,2})"
 )
 FOLDER_BATCH_RE = re.compile(r"(?<!\d)(\d{6})(?!\d)")
+CYCLE_RE = re.compile(r"(?<!\d)(\d{4})([WM])(\d{1,2})(?!\d)", re.IGNORECASE)
 
 
 def _read_csv(path: Path) -> pd.DataFrame:
@@ -53,11 +55,30 @@ def _parse_end_date_from_name(name: str) -> tuple[int, int, int] | None:
     return int(m.group(4)), int(m.group(5)), int(m.group(6))
 
 
+def _parse_cycle_end_date(text: str) -> tuple[int, int, int] | None:
+    m = CYCLE_RE.search(text)
+    if not m:
+        return None
+    year = int(m.group(1))
+    period_type = m.group(2).upper()
+    number = int(m.group(3))
+    if period_type == "W":
+        end = date.fromisocalendar(year, number, 7)
+    else:
+        end = date(year, number, calendar.monthrange(year, number)[1])
+    return end.year, end.month, end.day
+
+
 def _detect_batch_prefix(csv_path: Path, end_date: tuple[int, int, int] | None) -> str:
     for part in reversed(csv_path.resolve().parts):
         m = FOLDER_BATCH_RE.fullmatch(part)
         if m:
             return m.group(1)
+    cycle_text = " ".join(csv_path.resolve().parts[-6:]) + " " + csv_path.name
+    cycle_end = _parse_cycle_end_date(cycle_text)
+    if cycle_end:
+        y, mo, d = cycle_end
+        return f"{y % 100:02d}{mo:02d}{d:02d}"
     if end_date:
         y, mo, d = end_date
         return f"{y % 100:02d}{mo:02d}{d:02d}"

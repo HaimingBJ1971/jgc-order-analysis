@@ -97,7 +97,7 @@ python3 main.py \
     --output-dir ./output
 ```
 
-输出：`周期对比分析_YYYYMMDD_YYYYMMDD_门店.pdf` + `.docx`
+输出：`周期对比分析_YYYYMMDD_YYYYMMDD_门店.pdf` + `.docx`，并附加 `周几半年趋势_YYYYMMDD_YYYYMMDD_门店.xlsx` + `.pdf`
 
 ### 平台外卖统计 (平台经营数据分析)
 

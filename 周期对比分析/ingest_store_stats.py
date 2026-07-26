@@ -23,8 +23,9 @@ sys.path.insert(0, os.path.abspath(_lt_dir))
 from data_loader import load_excel, clean_orders, clean_items, get_item_features
 from order_merger import merge_orders
 from aggregator import aggregate_groups, filter_groups
+from ingest_validator import validate_pos_excel
 from db_manager import DatabaseManager
-from store_utils import infer_order_store, read_pos_store_from_excel, infer_store_from_pos_name
+from store_utils import read_pos_store_from_excel, infer_store_from_pos_name
 from daily_stats import compute_all_daily_stats, _area, _meal_period, _compute_member_status, _compute_opener
 
 
@@ -50,6 +51,11 @@ def _filter_by_date(df: pd.DataFrame, start: str | None, end: str | None) -> pd.
 
 
 def ingest(excel_path: str, store_name: str, db_path: str, start: str | None, end: str | None) -> None:
+    validation = validate_pos_excel(excel_path)
+    validation.raise_if_failed(prefix="单店入库")
+    if validation.store_name != store_name:
+        raise SystemExit(f"门店不一致: CLI={store_name}, 文件内容={validation.store_name}")
+
     db = DatabaseManager(db_path)
     raw_orders, raw_items = load_excel(excel_path)
     if start or end:
@@ -110,33 +116,28 @@ def ingest(excel_path: str, store_name: str, db_path: str, start: str | None, en
 
     group_sum["_filter_status"] = group_sum.apply(_tag_status, axis=1)
 
-    source_file = os.path.basename(excel_path)
-    order_ids = [
-        str(row["订单号"])
-        for _, row in raw_orders.iterrows()
-        if infer_order_store(row.to_dict(), source_file) == store_name
-    ]
-    db.insert_orders(raw_orders, source_file)
-    db.insert_items(raw_items, source_file)
-    db.relabel_order_sources(order_ids, source_file)
-    db.relabel_item_sources(order_ids, source_file)
-    db.insert_groups(group_sum)
-
     stats = compute_all_daily_stats(
         group_sum, orders_with_group, pre_merge_daily,
         items_clean if not items_clean.empty else None,
         store_name=store_name,
     )
-    if stats["overview_rows"]:
-        db.upsert_daily_overview(stats["overview_rows"])
-    if stats["order_count_rows"]:
-        db.upsert_daily_order_counts(stats["order_count_rows"])
-    if stats["bucket_rows"]:
-        db.upsert_daily_buckets(stats["bucket_rows"])
+    source_file = os.path.basename(excel_path)
+    snapshot_result = db.replace_pos_snapshot(
+        raw_orders,
+        raw_items,
+        group_sum,
+        source_file,
+        stats_result=stats,
+    )
 
     dates = sorted(set(d for d in group_sum["_date"].dropna().unique() if d and d != "NaT"))
     overall = sum(r[4] for r in stats["overview_rows"] if r[2] == "整体" and r[3] == "")
-    print(f"  入库 {store_name}: {len(raw_orders)} 单, {len(dates)} 天, 整体营业额合计 ¥{overall:,.0f}")
+    print(
+        f"  入库 {store_name}: {len(raw_orders)} 单, {len(dates)} 天, "
+        f"整体营业额合计 ¥{overall:,.0f}; "
+        f"移除旧订单 {snapshot_result['stale_orders_removed']} 单, "
+        f"旧团体 {snapshot_result['old_groups_removed']} 个"
+    )
     db.close()
 
 
@@ -148,9 +149,10 @@ def main():
     parser.add_argument("--start", help="仅处理此日起（YYYY-MM-DD）")
     parser.add_argument("--end", help="仅处理此日止（YYYY-MM-DD）")
     args = parser.parse_args()
-    store = args.store or detect_store_from_excel(args.excel)
-    if args.store and store != args.store:
-        raise SystemExit(f"门店不一致: CLI={args.store}, 文件内容={store}")
+    detected_store = detect_store_from_excel(args.excel)
+    store = args.store or detected_store
+    if args.store and detected_store != args.store:
+        raise SystemExit(f"门店不一致: CLI={args.store}, 文件内容={detected_store}")
     print(f"  识别门店(内容): {store}")
     ingest(args.excel, store, args.db, args.start, args.end)
 

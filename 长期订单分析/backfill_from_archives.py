@@ -73,16 +73,35 @@ def load_merged_archives(files: list[Path]) -> tuple[pd.DataFrame, pd.DataFrame]
 
     orders_dedup = orders_all.drop_duplicates(subset="订单号", keep="last").copy()
     if not items_all.empty:
+        selected_snapshot = orders_dedup[["订单号", "source_file"]].copy()
+        selected_snapshot["_order_id"] = selected_snapshot["订单号"].astype(str)
+        selected_snapshot["_source_file"] = selected_snapshot["source_file"].astype(str)
+        selected_snapshot = selected_snapshot[["_order_id", "_source_file"]].drop_duplicates()
+
+        items_all = items_all.copy()
+        items_all["_order_id"] = items_all["订单号"].astype(str)
+        items_all["_source_file"] = items_all["source_file"].astype(str)
+        items_all = items_all.merge(
+            selected_snapshot,
+            on=["_order_id", "_source_file"],
+            how="inner",
+        )
         # POS 商品明细必须保留行级数据。同一订单内同一商品可能拆成多行，
         # 不能按「订单号 + 商品编码 + 商品名称」去重，否则会少算销量。
-        # 历史导出包存在边界重叠时，只按 POS 行级键去重：优先「订单号 + 序号」；
-        # 若旧文件缺「序号」，退化为行号，仍避免同商品多行互相覆盖。
+        # 历史导出包存在边界重叠时，订单快照先决定取哪个导出包；
+        # 商品行只在同一导出包内部按 POS 行级键去重。
         items_all["_row_no"] = range(len(items_all))
         seq = items_all["序号"].astype(str) if "序号" in items_all.columns else items_all["_row_no"].astype(str)
-        items_all["_item_line_key"] = items_all["订单号"].astype(str) + "|seq:" + seq
+        items_all["_item_line_key"] = (
+            items_all["source_file"].astype(str)
+            + "|"
+            + items_all["订单号"].astype(str)
+            + "|seq:"
+            + seq
+        )
         items_dedup = (
             items_all.drop_duplicates(subset="_item_line_key", keep="last")
-            .drop(columns=["_item_line_key", "_row_no"])
+            .drop(columns=["_item_line_key", "_row_no", "_order_id", "_source_file"])
             .copy()
         )
     else:

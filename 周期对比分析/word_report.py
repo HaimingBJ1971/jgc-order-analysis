@@ -171,13 +171,17 @@ def generate_comparison_word(output_path, period_info, comparison_info, comp_dat
     cur_dishes = comp_data['dishes_current']
     ring_d_dict = dict(comp_data['dishes_ringbi'])
     tong_d_dict = dict(comp_data['dishes_tongbi'])
-    dish_headers = ['菜品名称', '本期销量', '环比销量', '变化', '变化率', '同比销量', '变化', '变化率']
+    current_group_count = int(comp_data.get('current_group_count') or 0)
+    dish_headers = ['菜品名称', '本期销量', '总团数', '点购率', '环比销量', '变化', '变化率', '同比销量', '变化', '变化率']
     dish_rows = []
     for name, qty in cur_dishes:
         rq = ring_d_dict.get(name); tq = tong_d_dict.get(name)
         rd, rr = _qty_change(qty, rq); td, tr = _qty_change(qty, tq)
+        order_rate = f'{qty / current_group_count * 100:.1f}%' if current_group_count > 0 else '-'
         dish_rows.append([
             (name, None), (str(qty), None),
+            (str(current_group_count) if current_group_count > 0 else '-', None),
+            (order_rate, None),
             (str(rq) if rq else '-', None), rd, rr,
             (str(tq) if tq else '-', None), td, tr,
         ])
@@ -185,6 +189,12 @@ def generate_comparison_word(output_path, period_info, comparison_info, comp_dat
     _add_para(
         doc,
         '注：本表销量采用 POS 店内全量正收入口径，包含自取外卖单、吧台及零食购买团体；赠送、免单、全额优惠等菜品收入≤0的商品不计入销量。不得用“销售数量-赠菜数量”替代正收入销量。第三方平台外卖若无商品级明细，不纳入商品销量排行。',
+        size=7,
+        color=RGBColor(0x66, 0x66, 0x66),
+    )
+    _add_para(
+        doc,
+        '点购率=本期销量/本期统计消费团体数，表示份数相对到店团体数的强度，非去重桌数占比。',
         size=7,
         color=RGBColor(0x66, 0x66, 0x66),
     )

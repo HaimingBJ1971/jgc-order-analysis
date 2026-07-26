@@ -237,9 +237,8 @@ def _pos_order_revenue_from_orders(raw_orders: pd.DataFrame) -> float:
     if raw_orders.empty or "订单收入" not in raw_orders.columns:
         return 0.0
     orders = raw_orders[raw_orders["订单号"].astype(str).str.fullmatch(r"\d+")].copy()
-    if "订单类型" in orders.columns:
-        orders = orders[orders["订单类型"].astype(str).str.strip() == "堂食"].copy()
     orders["订单收入"] = pd.to_numeric(orders["订单收入"], errors="coerce").fillna(0)
+    orders = orders[orders["订单收入"] > 0].copy()
     return float(orders["订单收入"].sum())
 
 
@@ -248,8 +247,9 @@ def compute_stats(excel_path: str, *, takeaway_revenue: float = 0.0) -> dict:
     group_sum, _group_items, merge_stats, items, _orders_with_group = load_and_process_orders(excel_path)
     raw_orders, raw_items = load_excel(excel_path)
     raw_orders_valid = raw_orders[raw_orders["订单号"].astype(str).str.fullmatch(r"\d+")].copy()
-    if "订单类型" in raw_orders_valid.columns:
-        raw_orders_valid = raw_orders_valid[raw_orders_valid["订单类型"].astype(str).str.strip() == "堂食"].copy()
+    if "订单收入" in raw_orders_valid.columns:
+        revenue = pd.to_numeric(raw_orders_valid["订单收入"], errors="coerce").fillna(0)
+        raw_orders_valid = raw_orders_valid[revenue > 0].copy()
     valid_ids = set(raw_orders_valid["订单号"].astype(str))
     qty_items = raw_items[raw_items["订单号"].astype(str).isin(valid_ids)].copy()
     return _build_stats_dict(

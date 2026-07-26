@@ -232,6 +232,78 @@ def _calc_category_distribution(items_data, category_field: str = '商品中类'
     return sorted(cat_rev.items(), key=lambda x: x[1], reverse=True)
 
 
+def _calc_positive_item_revenue(items_data) -> float:
+    """Sum POS item-attributed revenue under the report's positive-revenue policy."""
+    total = 0.0
+    for item_row in items_data:
+        try:
+            data = json.loads(item_row[1])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if _is_positive_revenue_item(data):
+            total += _item_revenue(data)
+    return total
+
+
+def _group_count_for_period(db_manager, start_date: str, end_date: str, store_name: str | None = None) -> int:
+    """Return current period kept dining-group count from daily_order_counts."""
+    params = [start_date, end_date]
+    if store_name:
+        store_clause = "AND store_name = ?"
+        params.append(store_name)
+    else:
+        store_clause = "AND store_name != '__legacy__'"
+    row = db_manager.conn.execute(
+        f"""
+        SELECT SUM(统计消费团体数)
+        FROM daily_order_counts
+        WHERE date BETWEEN ? AND ?
+          {store_clause}
+        """,
+        params,
+    ).fetchone()
+    return int(row[0] or 0) if row else 0
+
+
+def validate_pos_item_revenue_closure(
+    db_manager,
+    start_date: str,
+    end_date: str,
+    store_name: str | None = None,
+    tolerance_amount: float = 1.0,
+    tolerance_ratio: float = 0.001,
+) -> dict:
+    """
+    Fail fast when POS item-attributed revenue does not close to POS order revenue.
+
+    The category/distribution sections are POS item-attributed views, so their positive
+    item revenue must close to POS in-store order revenue. Third-party takeaway revenue
+    is intentionally excluded here because platform exports have no item-level detail.
+    """
+    order_revenue = float(db_manager.get_order_revenue_for_period(start_date, end_date, store_name) or 0)
+    items_data = db_manager.get_all_items_for_period(start_date, end_date, store_name)
+    item_revenue = _calc_positive_item_revenue(items_data)
+    diff = item_revenue - order_revenue
+    allowed = max(float(tolerance_amount), abs(order_revenue) * float(tolerance_ratio))
+    ok = abs(diff) <= allowed
+    result = {
+        'ok': ok,
+        'order_revenue': order_revenue,
+        'item_revenue': item_revenue,
+        'diff': diff,
+        'allowed': allowed,
+    }
+    if not ok:
+        store_label = f"{store_name} " if store_name else ""
+        raise ValueError(
+            f"{store_label}{start_date}~{end_date} POS商品归因收入未闭合："
+            f"订单收入 ¥{order_revenue:,.2f}，商品归因收入 ¥{item_revenue:,.2f}，"
+            f"差额 ¥{diff:,.2f}，允许误差 ¥{allowed:,.2f}。"
+            "请检查 items 是否存在重复快照或缺失明细，已停止生成周期对比报告。"
+        )
+    return result
+
+
 import re
 
 DRINK_DESSERT_CATS = [
@@ -314,10 +386,15 @@ def compute_comparison(db_manager, period_info, comparison_info, mode, store_nam
         'data_quality': {'ringbi_missing': False, 'tongbi_missing': False},
         'uncategorized_products': [],
         'category_dimension': category_section_meta(store_name),
+        'current_group_count': 0,
     }
 
     current_start = period_info['period_start']
     current_end = period_info['period_end']
+
+    result['item_revenue_closure'] = validate_pos_item_revenue_closure(
+        db_manager, current_start, current_end, store_name
+    )
 
     # ── 1. Operational data ──
     overview_cats = [
@@ -347,6 +424,7 @@ def compute_comparison(db_manager, period_info, comparison_info, mode, store_nam
         ('整体', '营业额'), ('整体', '人数'), ('整体', '人均'),
         ('包间', '营业额'), ('大厅', '营业额'), ('户外', '营业额'),
         ('包间', '人数'), ('大厅', '人数'), ('户外', '人数'),
+        ('包间', '人均'), ('大厅', '人均'), ('户外', '人均'),
         ('午市|整体', '营业额'), ('晚市|整体', '营业额'),
         ('会员', '营业额'),
     ]
@@ -436,6 +514,9 @@ def compute_comparison(db_manager, period_info, comparison_info, mode, store_nam
         comparison_info['tongbi_start'], comparison_info['tongbi_end'], store_name
     )
 
+    result['current_group_count'] = _group_count_for_period(
+        db_manager, current_start, current_end, store_name
+    )
     result['dishes_current'] = _calc_dish_rankings(items_current, target_dishes)
     result['dishes_ringbi'] = _calc_dish_rankings(items_ringbi, target_dishes)
     result['dishes_tongbi'] = _calc_dish_rankings(items_tongbi, target_dishes)

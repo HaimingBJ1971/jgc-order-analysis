@@ -49,6 +49,25 @@ def _detect_store_from_excel(file_path: str) -> str:
         return "未知门店"
 
 
+def _filter_items_to_order_snapshot(items_df: pd.DataFrame, orders_df: pd.DataFrame) -> pd.DataFrame:
+    """Keep item rows that belong to the selected order snapshot and source file."""
+    if items_df.empty or orders_df.empty:
+        return pd.DataFrame()
+    if "source_file" not in items_df.columns or "source_file" not in orders_df.columns:
+        return pd.DataFrame()
+
+    selected = orders_df[["订单号", "source_file"]].copy()
+    selected["_order_id"] = selected["订单号"].astype(str)
+    selected["_source_file"] = selected["source_file"].astype(str)
+    selected = selected[["_order_id", "_source_file"]].drop_duplicates()
+
+    items = items_df.copy()
+    items["_order_id"] = items["订单号"].astype(str)
+    items["_source_file"] = items["source_file"].astype(str)
+    filtered = items.merge(selected, on=["_order_id", "_source_file"], how="inner")
+    return filtered.drop(columns=["_order_id", "_source_file"], errors="ignore")
+
+
 def load_and_dedup_excels(file_paths: list, existing_order_ids: set = None):
     """
     Load multiple Excel files, deduplicate, and extract pre-clean daily counts.
@@ -60,7 +79,9 @@ def load_and_dedup_excels(file_paths: list, existing_order_ids: set = None):
     Returns:
         dict with keys:
             - raw_orders: deduped raw orders DataFrame (all new orders)
-            - raw_items: deduped raw items DataFrame
+            - raw_items: deduped raw items DataFrame for new orders
+            - snapshot_orders: deduped raw orders DataFrame for current input snapshots
+            - snapshot_items: item rows matching snapshot_orders order_id + source_file
             - pre_merge_daily: dict[date_str] -> {原始订单数, 外卖订单数, 非堂食订单数}
             - pre_merge_daily_by_store: dict[store] -> dict[date_str] -> counts
             - files_loaded: list of successfully loaded file names
@@ -127,6 +148,8 @@ def load_and_dedup_excels(file_paths: list, existing_order_ids: set = None):
 
         all_orders_raw.append(orders_raw)
         if items_raw is not None and not items_raw.empty:
+            items_raw = items_raw.copy()
+            items_raw["source_file"] = fname
             all_items_raw.append(items_raw)
         files_loaded.append(fname)
 
@@ -134,6 +157,8 @@ def load_and_dedup_excels(file_paths: list, existing_order_ids: set = None):
         return {
             'raw_orders': pd.DataFrame(),
             'raw_items': pd.DataFrame(),
+            'snapshot_orders': pd.DataFrame(),
+            'snapshot_items': pd.DataFrame(),
             'pre_merge_daily': pre_merge_counts,
             'pre_merge_daily_by_store': pre_merge_counts_by_store,
             'files_loaded': [],
@@ -148,20 +173,28 @@ def load_and_dedup_excels(file_paths: list, existing_order_ids: set = None):
 
     total_found = len(orders_concat)
 
-    # ── Filter out already-existing orders (incremental) ──
-    if existing_order_ids:
-        mask_new = ~orders_concat['订单号'].astype(str).isin(existing_order_ids)
-        new_count = int(mask_new.sum())
-        old_count = total_found - new_count
-        print(f"  已有 {old_count} 条订单在数据库中，新发现 {new_count} 条")
-        orders_concat = orders_concat[mask_new].copy()
-    else:
-        new_count = total_found
+    # Current input snapshot across files. Keep load-order semantics, and bind items to
+    # the same source_file selected for each order so overlapping files cannot stack rows.
+    orders_snapshot = orders_concat.drop_duplicates(subset='订单号', keep='first').copy()
+    items_snapshot = _filter_items_to_order_snapshot(items_concat, orders_snapshot)
 
-    if orders_concat.empty:
+    # ── Filter out already-existing orders (incremental) ──
+    orders_new = orders_snapshot.copy()
+    if existing_order_ids:
+        mask_new = ~orders_new['订单号'].astype(str).isin(existing_order_ids)
+        new_count = int(mask_new.sum())
+        old_count = len(orders_new) - new_count
+        print(f"  已有 {old_count} 条订单在数据库中，新发现 {new_count} 条")
+        orders_new = orders_new[mask_new].copy()
+    else:
+        new_count = len(orders_new)
+
+    if orders_new.empty:
         return {
             'raw_orders': pd.DataFrame(),
             'raw_items': pd.DataFrame(),
+            'snapshot_orders': orders_snapshot,
+            'snapshot_items': items_snapshot,
             'pre_merge_daily': pre_merge_counts,
             'pre_merge_daily_by_store': pre_merge_counts_by_store,
             'files_loaded': files_loaded,
@@ -170,26 +203,18 @@ def load_and_dedup_excels(file_paths: list, existing_order_ids: set = None):
             'skipped_files': skipped_files,
         }
 
-    # ── Dedup across files (keep='first' based on load order) ──
-    orders_dedup = orders_concat.drop_duplicates(subset='订单号', keep='first').copy()
-
-    if not items_concat.empty:
-        # 商品明细必须保留 POS 行级数据；同一订单同一商品多次加单/拆行都是真实销量。
-        items_dedup = items_concat.copy()
-        # Only keep items whose orders survived dedup
-        valid_order_ids = set(orders_dedup['订单号'].astype(str))
-        items_dedup = items_dedup[items_dedup['订单号'].astype(str).isin(valid_order_ids)].copy()
-    else:
-        items_dedup = pd.DataFrame()
+    items_new = _filter_items_to_order_snapshot(items_snapshot, orders_new)
 
     return {
-        'raw_orders': orders_dedup,
-        'raw_items': items_dedup,
+        'raw_orders': orders_new,
+        'raw_items': items_new,
+        'snapshot_orders': orders_snapshot,
+        'snapshot_items': items_snapshot,
         'pre_merge_daily': pre_merge_counts,
         'pre_merge_daily_by_store': pre_merge_counts_by_store,
         'files_loaded': files_loaded,
         'total_found': total_found,
-        'total_new': len(orders_dedup),
+        'total_new': len(orders_new),
         'skipped_files': skipped_files,
     }
 
@@ -211,7 +236,8 @@ def build_merged_dataset(new_orders, new_items, context_order_dicts, items_df_ra
 
     # Combine context orders with new orders
     all_orders = pd.concat([context_orders_df, new_orders], ignore_index=True)
-    all_orders = all_orders.drop_duplicates(subset='订单号', keep='first')
+    # Current POS snapshot is authoritative when the same order also exists in context.
+    all_orders = all_orders.drop_duplicates(subset='订单号', keep='last')
 
     # Get context order IDs
     context_ids = set()

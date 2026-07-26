@@ -77,34 +77,26 @@ def main():
     result = load_and_dedup_excels(args.files, existing_ids)
     print(f"  共扫描 {result['total_found']} 条订单，新发现 {result['total_new']} 条")
 
-    if result['total_new'] == 0:
-        print("\n  所有数据已包含在数据库中，跳过处理。")
-        if existing_dates[0] is None:
-            print("  数据库中暂无统计数据，无法生成 Excel。")
-            db.close()
-            return
+    snapshot_items = result.get('snapshot_items', pd.DataFrame())
+    snapshot_orders = result.get('snapshot_orders', pd.DataFrame())
 
-        # Generate Excel from existing DB data
-        _generate_excel_from_db(db, args.output_dir)
-        db.close()
-        return
+    # ── Phase B: Process Current Snapshot ──
+    print("\n[Phase B] 处理当前 POS 快照...")
 
-    # ── Phase B: Process New Data ──
-    print("\n[Phase B] 处理新数据...")
-
-    raw_orders = result['raw_orders']
-    raw_items = result['raw_items']
+    raw_orders = snapshot_orders
+    raw_items = snapshot_items
     pre_merge_daily = result['pre_merge_daily']
     pre_merge_daily_by_store = result.get('pre_merge_daily_by_store', {})
 
     if raw_orders.empty:
-        print("  无有效新订单。")
+        print("  无有效订单快照。")
         db.close()
         return
 
     # Determine affected tables and date range
-    new_order_ids = set(raw_orders['订单号'].astype(str))
+    new_order_ids = set(result['raw_orders']['订单号'].astype(str)) if not result['raw_orders'].empty else set()
     affected_tables = set(raw_orders['桌台'].astype(str).unique())
+    snapshot_scopes = db.snapshot_scope_pairs(raw_orders)
 
     # Extract date range from new orders
     raw_orders_temp = raw_orders.copy()
@@ -121,19 +113,17 @@ def main():
 
     # Load context orders from DB for cross-boundary merge
     print(f"  加载上下文订单（{min_date} ~ {max_date}, {len(affected_tables)} 个桌台）...")
-    context_dicts = db.load_context_orders(affected_tables, (min_date, max_date))
+    context_dicts = db.load_context_orders(
+        affected_tables,
+        (min_date, max_date),
+        exclude_scopes=snapshot_scopes,
+    )
     print(f"  从数据库加载 {len(context_dicts)} 条上下文订单")
 
     # Build merged dataset (context + new)
     merged_orders, merged_items = build_merged_dataset(
         raw_orders, raw_items, context_dicts, raw_items
     )
-
-    # Save raw data to DB BEFORE cleaning
-    print("  写入原始订单数据到数据库...")
-    n_orders = db.insert_orders(raw_orders, os.path.basename(args.files[0]))
-    n_items = db.insert_items(raw_items, os.path.basename(args.files[0]))
-    print(f"  写入 {n_orders} 条订单, {n_items} 条商品明细")
 
     # Clean
     print("  清洗数据...")
@@ -232,10 +222,6 @@ def main():
     else:
         group_sum['_filter_status'] = 'kept'
 
-    # Write groups to DB
-    print("  写入团体数据到数据库...")
-    db.insert_groups(group_sum)
-
     # ── Compute Daily Stats (per store) ──
     print("\n  计算每日统计...")
     group_sum = attach_store_to_groups(group_sum, orders_with_group)
@@ -261,14 +247,38 @@ def main():
             if key in store_stats:
                 stats_result[key].extend(store_stats[key])
 
-    # Write daily stats to DB (INSERT OR REPLACE for affected dates)
-    print("  写入每日统计到数据库...")
-    if stats_result['overview_rows']:
-        db.upsert_daily_overview(stats_result['overview_rows'])
-    if stats_result['order_count_rows']:
-        db.upsert_daily_order_counts(stats_result['order_count_rows'])
-    if stats_result['bucket_rows']:
-        db.upsert_daily_buckets(stats_result['bucket_rows'])
+    # Merge context may include adjacent days. Only the authoritative POS snapshot
+    # scopes may replace daily aggregates; context-only dates remain untouched.
+    for key in ("overview_rows", "order_count_rows", "bucket_rows"):
+        stats_result[key] = [
+            row
+            for row in stats_result[key]
+            if (str(row[0]), str(row[1])) in snapshot_scopes
+        ]
+    snapshot_dates = {day for day, _store in snapshot_scopes}
+    stats_result["opener_rows"] = [
+        row for row in stats_result["opener_rows"]
+        if str(row[0]) in snapshot_dates
+    ]
+
+    # Atomically replace raw orders, item lines, groups, and daily aggregates.
+    print("  原子替换订单、商品、团体与每日统计快照...")
+    snapshot_result = db.replace_pos_snapshot(
+        snapshot_orders,
+        snapshot_items,
+        group_sum,
+        os.path.basename(args.files[0]),
+        stats_result=stats_result,
+    )
+    print(
+        "  快照写入完成："
+        f"订单 {snapshot_result['orders_written']}，"
+        f"商品 {snapshot_result['items_written']}，"
+        f"团体 {snapshot_result['groups_written']}，"
+        f"日汇总 {snapshot_result['daily_rows_written']}；"
+        f"移除旧订单 {snapshot_result['stale_orders_removed']}，"
+        f"旧团体 {snapshot_result['old_groups_removed']}"
+    )
     if stats_result['opener_rows']:
         db.upsert_daily_opener_stats(stats_result['opener_rows'])
 

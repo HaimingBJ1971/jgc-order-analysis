@@ -122,6 +122,24 @@ def _normalize_store(raw: str) -> str:
     return raw or "未知门店"
 
 
+def _store_from_filename(path: Path) -> str:
+    name = path.name
+    if "万荷" in name:
+        return "万荷店"
+    if "保利" in name:
+        return "保利店"
+    return "未知门店"
+
+
+def _check_filename_store(path: Path, content_store: str, label: str) -> list[str]:
+    expected = _store_from_filename(path)
+    if content_store == "未知门店":
+        return [f"{label}：无法从文件内容识别门店"]
+    if expected != "未知门店" and expected != content_store:
+        return [f"{label}：文件名门店为 {expected}，Excel 内容门店为 {content_store}"]
+    return []
+
+
 def _parse_range_text(text: str) -> tuple[str, str] | None:
     m = _DATE_RANGE_RE.search(str(text))
     if not m:
@@ -260,8 +278,8 @@ def validate_pos_excel(
         return result
 
     try:
-        orders_raw = pd.read_excel(path, sheet_name="店内订单明细")
-        items_raw = pd.read_excel(path, sheet_name="商品-店内订单明细")
+        orders_raw = pd.read_excel(path, sheet_name="店内订单明细", header=None)
+        items_raw = pd.read_excel(path, sheet_name="商品-店内订单明细", header=None)
     except Exception as exc:
         result.ok = False
         result.errors.append(f"无法读取 {path.name}：{exc}")
@@ -270,6 +288,7 @@ def validate_pos_excel(
     meta = _read_metadata(orders_raw)
     store_raw = meta.get("门店名称", "")
     result.store_name = _normalize_store(store_raw)
+    result.errors.extend(_check_filename_store(path, result.store_name, "POS"))
 
     rng = _parse_range_text(meta.get("下单时间", "")) or _parse_range_from_filename(path)
     if rng:
@@ -327,6 +346,7 @@ def validate_takeaway_excel(
 
     meta = _read_metadata(df_raw)
     result.store_name = _normalize_store(meta.get("门店名称", ""))
+    result.errors.extend(_check_filename_store(path, result.store_name, "外卖"))
     rng = _parse_range_text(meta.get("下单时间", "") or meta.get("营业日", "")) or _parse_range_from_filename(path)
     if rng:
         result.period_start, result.period_end = rng
