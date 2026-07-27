@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import calendar
 import re
 import sys
 from copy import copy
@@ -55,7 +54,14 @@ def _parse_end_date_from_name(name: str) -> tuple[int, int, int] | None:
     return int(m.group(4)), int(m.group(5)), int(m.group(6))
 
 
-def _parse_cycle_end_date(text: str) -> tuple[int, int, int] | None:
+def _parse_start_date_from_name(name: str) -> tuple[int, int, int] | None:
+    m = DATE_RANGE_RE.search(name)
+    if not m:
+        return None
+    return int(m.group(1)), int(m.group(2)), int(m.group(3))
+
+
+def _parse_cycle_start_date(text: str) -> tuple[int, int, int] | None:
     m = CYCLE_RE.search(text)
     if not m:
         return None
@@ -63,24 +69,24 @@ def _parse_cycle_end_date(text: str) -> tuple[int, int, int] | None:
     period_type = m.group(2).upper()
     number = int(m.group(3))
     if period_type == "W":
-        end = date.fromisocalendar(year, number, 7)
+        start = date.fromisocalendar(year, number, 1)
     else:
-        end = date(year, number, calendar.monthrange(year, number)[1])
-    return end.year, end.month, end.day
+        start = date(year, number, 1)
+    return start.year, start.month, start.day
 
 
-def _detect_batch_prefix(csv_path: Path, end_date: tuple[int, int, int] | None) -> str:
+def _detect_batch_prefix(csv_path: Path, start_date: tuple[int, int, int] | None) -> str:
     for part in reversed(csv_path.resolve().parts):
         m = FOLDER_BATCH_RE.fullmatch(part)
         if m:
             return m.group(1)
     cycle_text = " ".join(csv_path.resolve().parts[-6:]) + " " + csv_path.name
-    cycle_end = _parse_cycle_end_date(cycle_text)
-    if cycle_end:
-        y, mo, d = cycle_end
+    cycle_start = _parse_cycle_start_date(cycle_text)
+    if cycle_start:
+        y, mo, d = cycle_start
         return f"{y % 100:02d}{mo:02d}{d:02d}"
-    if end_date:
-        y, mo, d = end_date
+    if start_date:
+        y, mo, d = start_date
         return f"{y % 100:02d}{mo:02d}{d:02d}"
     return datetime.now().strftime("%y%m%d")
 
@@ -247,7 +253,8 @@ def convert_csv_to_corpus_xlsx(
 
     df_raw = _read_csv(input_csv)
     end_date = _parse_end_date_from_name(input_csv.name)
-    batch_prefix = _detect_batch_prefix(input_csv, end_date)
+    start_date = _parse_start_date_from_name(input_csv.name)
+    batch_prefix = _detect_batch_prefix(input_csv, start_date)
     df_out = _build_output_df(df_raw, batch_prefix)
 
     if output_path is None:

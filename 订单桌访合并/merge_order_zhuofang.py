@@ -111,15 +111,31 @@ TARGET_DISHES = [
     "五指毛桃白芸豆猪肚三年老鸡汤(盅)",
 ]
 
-TARGET_NEW_ITEMS = [
-    "麻辣红油凉鸡",
-    "酸辣手工米皮",
-    "川西腊肉炒黄瓜花",
-    "蒜蓉干椒红苋菜",
-    "山楂覆盆子果饮（扎/冰）",
-    "红心芭乐（扎/冰）",
-    "桂花乌龙牛乳茶（杯/冰）",
+WANHE_TARGET_NEW_ITEMS = [
+    "薏仁当归三年老鸡汤",
+    "腊肉青蒜炒鲜竹笋",
+    "大蒜红薯叶",
+    "白灼罗马生菜",
 ]
+
+WANHE_MANAGEMENT_REGIONS = ("包房", "大厅及户外")
+WANHE_HIGH_PRICE_MIN_UNIT_PRICE = 200
+WANHE_PER_100_SALES_LABEL = "每百桌（单）销量"
+WANHE_NON_DISH_MIDDLE_CATEGORIES = {
+    "套餐",
+    "打包",
+    "调饮汁",
+    "饮料和水果",
+    "茶",
+    "咖啡",
+    "冰淇淋",
+    "啤酒",
+    "白酒",
+    "葡萄酒",
+    "鸡尾酒",
+    "苏格兰威士忌",
+    "黄酒",
+}
 
 BAOLI_TARGET_DISHES = [
     "川南鱼香肉丝（不能免葱）",
@@ -161,14 +177,14 @@ def compute_dish_stats(items_df):
 
 
 def compute_new_item_stats(items_df):
-    """统计重点新品销售份数，按数量降序返回 [(品名, 份数), ...]"""
+    """统计万荷店重点新品销售份数，按数量降序返回。"""
     items_df = items_df.copy()
     items_df["商品名称_规范化"] = items_df["商品名称"].astype(str).apply(
         lambda x: x.replace('（', '(').replace('）', ')')
     )
 
     stats = []
-    for target in TARGET_NEW_ITEMS:
+    for target in WANHE_TARGET_NEW_ITEMS:
         normalized = target.replace('（', '(').replace('）', ')')
         matched = items_df[items_df["商品名称_规范化"].str.contains(normalized, na=False, case=False, regex=False)]
         if len(matched) == 0:
@@ -177,6 +193,151 @@ def compute_new_item_stats(items_df):
         stats.append((target, qty))
 
     return sorted(stats, key=lambda x: x[1], reverse=True)
+
+
+def _wanhe_management_region(table_name):
+    """把万荷桌台归并为管理分析使用的两个区域。"""
+    table_text = str(table_name).strip()
+    if table_text.startswith(("包间", "包房")):
+        return "包房"
+    if table_text.startswith(("大厅", "沙发", "户外")):
+        return "大厅及户外"
+    return "其他"
+
+
+def compute_wanhe_management_sales(gs, items_df):
+    """
+    统计万荷重点菜品区域销售结构。
+
+    - 区域：包房 / 大厅及户外，两类团体数必须与有效消费团体数闭合。
+    - 鱼香梅花肉丝：统计有效团体内正收入销量。
+    - 高价菜：POS 单价 >= 200 元、菜品收入 > 0，排除套餐父项、
+      酒水饮料、包房费、生日布置和打包服务。
+    """
+    required_group_columns = {"桌台", "包含订单"}
+    required_item_columns = {
+        "订单号", "商品名称", "单价", "数量", "菜品收入",
+        "菜品销售类型", "商品中类", "商品大类",
+    }
+    missing_group = required_group_columns - set(gs.columns)
+    missing_item = required_item_columns - set(items_df.columns)
+    if missing_group:
+        raise ValueError(f"万荷区域销售统计缺少消费团体字段：{sorted(missing_group)}")
+    if missing_item:
+        raise ValueError(f"万荷区域销售统计缺少商品字段：{sorted(missing_item)}")
+
+    group_regions = gs["桌台"].apply(_wanhe_management_region)
+    other_mask = ~group_regions.isin(WANHE_MANAGEMENT_REGIONS)
+    if other_mask.any():
+        other_tables = sorted(set(gs.loc[other_mask, "桌台"].astype(str)))
+        raise ValueError(
+            "万荷区域销售统计无法闭合：存在未归入“包房/大厅及户外”的桌台 "
+            f"{other_tables}"
+        )
+
+    group_counts = {
+        region: int((group_regions == region).sum())
+        for region in WANHE_MANAGEMENT_REGIONS
+    }
+    if sum(group_counts.values()) != len(gs):
+        raise ValueError(
+            "万荷区域销售统计团体数不闭合："
+            f"区域合计 {sum(group_counts.values())}，统计消费团体数 {len(gs)}"
+        )
+
+    order_regions = {}
+    for idx, row in gs.iterrows():
+        region = group_regions.loc[idx]
+        for order_id in row["包含订单"]:
+            order_key = str(order_id)
+            previous = order_regions.get(order_key)
+            if previous is not None and previous != region:
+                raise ValueError(
+                    f"订单 {order_key} 同时归入 {previous} 和 {region}，无法生成区域销售统计"
+                )
+            order_regions[order_key] = region
+
+    items = items_df.copy()
+    items["_management_region"] = items["订单号"].astype(str).map(order_regions)
+    items["_unit_price"] = pd.to_numeric(items["单价"], errors="coerce")
+    items["_quantity"] = pd.to_numeric(items["数量"], errors="coerce").fillna(0)
+    items["_dish_revenue"] = pd.to_numeric(items["菜品收入"], errors="coerce").fillna(0)
+    items["_product_name"] = items["商品名称"].astype(str).str.strip()
+    items["_sales_type"] = items["菜品销售类型"].astype(str).str.strip()
+    items["_middle_category"] = items["商品中类"].astype(str).str.strip()
+    items["_major_category"] = items["商品大类"].astype(str).str.strip()
+
+    effective_items = items[
+        items["_management_region"].isin(WANHE_MANAGEMENT_REGIONS)
+        & items["_dish_revenue"].gt(0)
+    ].copy()
+
+    fish_items = effective_items[
+        effective_items["_product_name"].str.contains(
+            "鱼香梅花肉丝", na=False, case=False, regex=False
+        )
+    ]
+    fish_qty = {
+        region: float(
+            fish_items.loc[
+                fish_items["_management_region"] == region, "_quantity"
+            ].sum()
+        )
+        for region in WANHE_MANAGEMENT_REGIONS
+    }
+
+    high_price_mask = (
+        effective_items["_unit_price"].ge(WANHE_HIGH_PRICE_MIN_UNIT_PRICE)
+        & effective_items["_sales_type"].ne("套餐")
+        & effective_items["_major_category"].eq("金谷仓")
+        & ~effective_items["_middle_category"].isin(
+            WANHE_NON_DISH_MIDDLE_CATEGORIES
+        )
+    )
+    high_price_items = effective_items[high_price_mask].copy()
+    high_price_qty = {
+        region: float(
+            high_price_items.loc[
+                high_price_items["_management_region"] == region, "_quantity"
+            ].sum()
+        )
+        for region in WANHE_MANAGEMENT_REGIONS
+    }
+
+    detail_rows = []
+    grouped = high_price_items.groupby(
+        ["_product_name", "_unit_price"], dropna=False
+    )
+    for (product_name, unit_price), product_items in grouped:
+        region_qty = {
+            region: float(
+                product_items.loc[
+                    product_items["_management_region"] == region, "_quantity"
+                ].sum()
+            )
+            for region in WANHE_MANAGEMENT_REGIONS
+        }
+        total_qty = sum(region_qty.values())
+        if total_qty <= 0:
+            continue
+        detail_rows.append({
+            "product_name": product_name,
+            "unit_price": float(unit_price),
+            "region_qty": region_qty,
+            "total_qty": total_qty,
+            "room_share": region_qty["包房"] / total_qty,
+        })
+    detail_rows.sort(
+        key=lambda row: (-row["total_qty"], -row["unit_price"], row["product_name"])
+    )
+
+    return {
+        "group_counts": group_counts,
+        "total_groups": len(gs),
+        "fish_qty": fish_qty,
+        "high_price_qty": high_price_qty,
+        "high_price_dishes": detail_rows,
+    }
 
 
 def _make_dish_table(data_rows):
@@ -196,6 +357,142 @@ def _make_dish_table(data_rows):
         ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.whitesmoke, colors.white]),
     ]))
     return tbl
+
+
+def _format_sales_quantity(value):
+    """份数优先显示整数，保留非整数 POS 数量。"""
+    number = float(value)
+    if abs(number - round(number)) < 1e-9:
+        return str(int(round(number)))
+    return f"{number:.2f}".rstrip("0").rstrip(".")
+
+
+def _make_wanhe_management_summary_table(management_stats):
+    """创建万荷重点菜品区域销售结构概览表。"""
+    room_groups = management_stats["group_counts"]["包房"]
+    hall_groups = management_stats["group_counts"]["大厅及户外"]
+    total_groups = management_stats["total_groups"]
+    fish_room = management_stats["fish_qty"]["包房"]
+    fish_hall = management_stats["fish_qty"]["大厅及户外"]
+    high_room = management_stats["high_price_qty"]["包房"]
+    high_hall = management_stats["high_price_qty"]["大厅及户外"]
+
+    def _share(room_value, hall_value):
+        total_value = room_value + hall_value
+        return f"{room_value / total_value * 100:.1f}%" if total_value else "-"
+
+    def _per_100(value, group_count):
+        return f"{value / group_count * 100:.1f}" if group_count else "-"
+
+    rows = [
+        ["指标", "包房", "大厅及户外", "合计", "包房占比"],
+        [
+            "有效消费团体数",
+            f"{room_groups} 团",
+            f"{hall_groups} 团",
+            f"{total_groups} 团",
+            _share(room_groups, hall_groups),
+        ],
+        [
+            "鱼香梅花肉丝销售份数",
+            _format_sales_quantity(fish_room),
+            _format_sales_quantity(fish_hall),
+            _format_sales_quantity(fish_room + fish_hall),
+            _share(fish_room, fish_hall),
+        ],
+        [
+            f"鱼香梅花肉丝{WANHE_PER_100_SALES_LABEL}",
+            _per_100(fish_room, room_groups),
+            _per_100(fish_hall, hall_groups),
+            _per_100(fish_room + fish_hall, total_groups),
+            "-",
+        ],
+        [
+            f"高价菜销售份数（单价不低于¥{WANHE_HIGH_PRICE_MIN_UNIT_PRICE}）",
+            _format_sales_quantity(high_room),
+            _format_sales_quantity(high_hall),
+            _format_sales_quantity(high_room + high_hall),
+            _share(high_room, high_hall),
+        ],
+        [
+            f"高价菜{WANHE_PER_100_SALES_LABEL}",
+            _per_100(high_room, room_groups),
+            _per_100(high_hall, hall_groups),
+            _per_100(high_room + high_hall, total_groups),
+            "-",
+        ],
+    ]
+    table = Table(
+        rows,
+        colWidths=[6.7 * cm, 2.7 * cm, 3.3 * cm, 2.7 * cm, 2.7 * cm],
+        repeatRows=1,
+    )
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2c3e50")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("ALIGN", (0, 0), (-1, 0), "CENTER"),
+        ("ALIGN", (0, 1), (0, -1), "LEFT"),
+        ("ALIGN", (1, 1), (-1, -1), "CENTER"),
+        ("FONTNAME", (0, 0), (-1, -1), CHINESE_FONT),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.whitesmoke, colors.white]),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+    ]))
+    return table
+
+
+def _make_wanhe_high_price_detail_table(management_stats, cell_style):
+    """创建万荷高价菜分菜品区域明细表。"""
+    rows = [[
+        "菜品名称", "单价", "包房份数", "大厅及户外份数", "合计", "包房销售占比",
+    ]]
+    for item in management_stats["high_price_dishes"]:
+        room_qty = item["region_qty"]["包房"]
+        hall_qty = item["region_qty"]["大厅及户外"]
+        rows.append([
+            Paragraph(html_escape(item["product_name"]), cell_style),
+            f"¥{item['unit_price']:,.0f}",
+            _format_sales_quantity(room_qty),
+            _format_sales_quantity(hall_qty),
+            _format_sales_quantity(item["total_qty"]),
+            f"{item['room_share'] * 100:.1f}%",
+        ])
+
+    room_total = management_stats["high_price_qty"]["包房"]
+    hall_total = management_stats["high_price_qty"]["大厅及户外"]
+    grand_total = room_total + hall_total
+    rows.append([
+        "合计",
+        "-",
+        _format_sales_quantity(room_total),
+        _format_sales_quantity(hall_total),
+        _format_sales_quantity(grand_total),
+        f"{room_total / grand_total * 100:.1f}%" if grand_total else "-",
+    ])
+
+    table = Table(
+        rows,
+        colWidths=[8.5 * cm, 2.0 * cm, 2.5 * cm, 3.2 * cm, 2.0 * cm, 2.7 * cm],
+        repeatRows=1,
+    )
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2c3e50")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("ALIGN", (0, 0), (-1, 0), "CENTER"),
+        ("ALIGN", (0, 1), (0, -1), "LEFT"),
+        ("ALIGN", (1, 1), (-1, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("FONTNAME", (0, 0), (-1, -1), CHINESE_FONT),
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.whitesmoke, colors.white]),
+        ("BACKGROUND", (0, -1), (-1, -1), colors.lightgrey),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    return table
 
 
 def _compute_baoli_dish_stats(items_df):
@@ -1030,6 +1327,32 @@ def generate_pdf_report(gs, group_items, stats, items_df, store_name, target_dat
     dish_data = [['菜品名称', '销售份数']] + [[name, str(qty)] for name, qty in dish_stats]
     story.append(_make_dish_table(dish_data))
 
+    if not is_baoli:
+        management_stats = compute_wanhe_management_sales(gs, items_df)
+        story.append(PageBreak())
+        story.append(Paragraph('重点菜品区域销售结构（管理分析）', section_title_style))
+        story.append(Paragraph(
+            '区域口径：包房；大厅及户外（大厅与户外合并）。'
+            f'“{WANHE_PER_100_SALES_LABEL}”用于消除两类区域桌数差异，便于比较销售强度。',
+            normal_style,
+        ))
+        story.append(Spacer(1, 0.25 * cm))
+        story.append(_make_wanhe_management_summary_table(management_stats))
+        story.append(Spacer(1, 0.45 * cm))
+        story.append(Paragraph(
+            f'高价菜分菜品明细（POS 单价不低于¥{WANHE_HIGH_PRICE_MIN_UNIT_PRICE}）',
+            section_title_style,
+        ))
+        story.append(_make_wanhe_high_price_detail_table(management_stats, cell_l))
+        story.append(Spacer(1, 0.2 * cm))
+        story.append(Paragraph(
+            '注：高价菜仅统计有效消费团体内正收入的实际菜品；'
+            '排除套餐父项、酒水饮料、包房费、生日布置和打包服务，'
+            '保留符合条件的单品与套餐子项。',
+            formula_style,
+        ))
+        story.append(PageBreak())
+
     # 七、重点新品销售统计 / 保利店午晚热销统计
     story.append(Spacer(1, 0.5 * cm))
     if is_baoli:
@@ -1504,6 +1827,61 @@ def generate_markdown_report(gs, stats, store_name, target_date, output_path, un
     md_dish_stats = _compute_baoli_dish_stats(items_df) if is_baoli_md else compute_dish_stats(items_df)
     for name, qty in md_dish_stats:
         lines.append(f'| {name} | {qty} |')
+
+    if not is_baoli_md:
+        management_stats = compute_wanhe_management_sales(gs, items_df)
+        room_groups = management_stats["group_counts"]["包房"]
+        hall_groups = management_stats["group_counts"]["大厅及户外"]
+        total_groups = management_stats["total_groups"]
+        fish_room = management_stats["fish_qty"]["包房"]
+        fish_hall = management_stats["fish_qty"]["大厅及户外"]
+        high_room = management_stats["high_price_qty"]["包房"]
+        high_hall = management_stats["high_price_qty"]["大厅及户外"]
+
+        def _md_share(room_value, hall_value):
+            total_value = room_value + hall_value
+            return f"{room_value / total_value * 100:.1f}%" if total_value else "-"
+
+        def _md_per_100(value, group_count):
+            return f"{value / group_count * 100:.1f}" if group_count else "-"
+
+        lines += [
+            '',
+            '### 重点菜品区域销售结构（管理分析）',
+            '',
+            f'区域口径：包房；大厅及户外（大厅与户外合并）。“{WANHE_PER_100_SALES_LABEL}”用于消除两类区域桌数差异。',
+            '',
+            '| 指标 | 包房 | 大厅及户外 | 合计 | 包房占比 |',
+            '|------|-----:|-----------:|-----:|---------:|',
+            f'| 有效消费团体数 | {room_groups} 团 | {hall_groups} 团 | {total_groups} 团 | {_md_share(room_groups, hall_groups)} |',
+            f'| 鱼香梅花肉丝销售份数 | {_format_sales_quantity(fish_room)} | {_format_sales_quantity(fish_hall)} | {_format_sales_quantity(fish_room + fish_hall)} | {_md_share(fish_room, fish_hall)} |',
+            f'| 鱼香梅花肉丝{WANHE_PER_100_SALES_LABEL} | {_md_per_100(fish_room, room_groups)} | {_md_per_100(fish_hall, hall_groups)} | {_md_per_100(fish_room + fish_hall, total_groups)} | - |',
+            f'| 高价菜销售份数（单价不低于¥{WANHE_HIGH_PRICE_MIN_UNIT_PRICE}） | {_format_sales_quantity(high_room)} | {_format_sales_quantity(high_hall)} | {_format_sales_quantity(high_room + high_hall)} | {_md_share(high_room, high_hall)} |',
+            f'| 高价菜{WANHE_PER_100_SALES_LABEL} | {_md_per_100(high_room, room_groups)} | {_md_per_100(high_hall, hall_groups)} | {_md_per_100(high_room + high_hall, total_groups)} | - |',
+            '',
+            f'#### 高价菜分菜品明细（POS 单价不低于¥{WANHE_HIGH_PRICE_MIN_UNIT_PRICE}）',
+            '',
+            '| 菜品名称 | 单价 | 包房份数 | 大厅及户外份数 | 合计 | 包房销售占比 |',
+            '|----------|-----:|---------:|---------------:|-----:|-------------:|',
+        ]
+        for item in management_stats["high_price_dishes"]:
+            product_name = item["product_name"].replace("|", "\\|")
+            room_qty = item["region_qty"]["包房"]
+            hall_qty = item["region_qty"]["大厅及户外"]
+            lines.append(
+                f'| {product_name} | ¥{item["unit_price"]:,.0f} | '
+                f'{_format_sales_quantity(room_qty)} | {_format_sales_quantity(hall_qty)} | '
+                f'{_format_sales_quantity(item["total_qty"])} | {item["room_share"] * 100:.1f}% |'
+            )
+        grand_total = high_room + high_hall
+        lines += [
+            f'| **合计** | - | **{_format_sales_quantity(high_room)}** | '
+            f'**{_format_sales_quantity(high_hall)}** | **{_format_sales_quantity(grand_total)}** | '
+            f'**{high_room / grand_total * 100:.1f}%** |' if grand_total else
+            '| **合计** | - | **0** | **0** | **0** | **-** |',
+            '',
+            '注：高价菜仅统计有效消费团体内正收入的实际菜品；排除套餐父项、酒水饮料、包房费、生日布置和打包服务，保留符合条件的单品与套餐子项。',
+        ]
 
     # 七、重点新品销售统计 / 保利店午晚热销统计
     if is_baoli_md:
